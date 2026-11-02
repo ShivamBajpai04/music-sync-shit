@@ -1,99 +1,86 @@
-import {
-  REMOTE_PATH,
-  SOURCE_LABELS,
-  advance,
-  type AgentToRemote,
-  type PlayerState,
-  type RemoteToAgent,
-  type SourceCommand,
-  type SourceId,
-  type SourceState,
-} from '../shared/protocol.ts';
+import { SOURCE_LABELS, advance, type RemoteToAgent, type SourceCommand, type SourceId, type SourceState } from '../shared/protocol.ts';
+import { watchPlayers, type PlayerConnection } from './players.ts';
 
-const RECONNECT_MS = 2_000;
 const TICK_MS = 250;
 const container = document.getElementById('players')!;
 
-interface View {
-  online: boolean;
-  player: PlayerState | null;
-  // null for the placeholder card shown when no Source tab is open.
-  card: SourceState | null;
-  receivedAt: number;
-}
+// One group per Player: its name, status and the Mac's volume, then a card
+// per Source the agent lists.
+function createPlayerGroup() {
+  let player: PlayerConnection | null = null;
+  // While the slider is held, incoming state doesn't move it.
+  let adjustingVolume = false;
 
-// One Player's connection. It shows one card per Source the agent lists.
-function connectPlayer(url: string) {
-  let socket: WebSocket | null = null;
-  let player: PlayerState | null = null;
-  let receivedAt = 0;
-  const group = el('div', '', 'player');
-  container.append(group);
+  const element = el('section', '', 'player');
+  const name = el('h2', 'Player');
+  const status = el('span', '', 'status');
+  const header = el('header');
+  header.append(name, status);
+
+  const volume = slider('Volume');
+  volume.max = '100';
+  volume.addEventListener('input', () => (adjustingVolume = true));
+  volume.addEventListener('change', () => {
+    adjustingVolume = false;
+    player?.send({ type: 'set-volume', volume: Number(volume.value) });
+  });
+  const volumeRow = el('label', '', 'volume');
+  volumeRow.append(el('span', '🔈'), volume, el('span', '🔊'));
+
+  const cardList = el('div', '', 'cards');
+  element.append(header, volumeRow, cardList);
   const cards = new Map<SourceId | 'none', ReturnType<typeof createCard>>();
 
-  function send(message: RemoteToAgent) {
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
-  }
+  function update(next: PlayerConnection) {
+    player = next;
+    const { online, state } = player;
+    name.textContent = state?.name ?? player.label;
+    status.textContent = online ? 'Online' : 'Unavailable';
+    status.className = `status ${online ? 'online' : 'offline'}`;
+    element.classList.toggle('offline', !online);
 
-  function render() {
-    const online = socket?.readyState === WebSocket.OPEN && player !== null;
-    const shown: (SourceState | null)[] = online && player!.sources.length ? player!.sources : [null];
+    volume.disabled = !online || state?.volume == null;
+    if (!adjustingVolume && state?.volume != null) volume.value = String(state.volume);
+
+    const shown: (SourceState | null)[] = online && state!.sources.length ? state!.sources : [null];
     const keys = shown.map((card) => card?.source ?? 'none');
-
     for (const [key, card] of cards) {
       if (!keys.includes(key)) {
         card.element.remove();
         cards.delete(key);
       }
     }
-    shown.forEach((state, index) => {
+    shown.forEach((source, index) => {
       const key = keys[index];
       let card = cards.get(key);
       if (!card) {
-        card = createCard(send);
+        card = createCard((message) => player?.send(message));
         cards.set(key, card);
       }
       // Keeps the cards in SOURCE_ORDER; a no-op when already in place.
-      if (group.children[index] !== card.element) group.insertBefore(card.element, group.children[index] ?? null);
-      card.update({ online, player, card: state, receivedAt });
+      if (cardList.children[index] !== card.element) {
+        cardList.insertBefore(card.element, cardList.children[index] ?? null);
+      }
+      card.update(online, source, player!.receivedAt);
     });
   }
 
-  function connect() {
-    socket = new WebSocket(url);
-    socket.onmessage = (event) => {
-      const message = JSON.parse(String(event.data)) as AgentToRemote;
-      if (message.type === 'state') {
-        player = message.state;
-        receivedAt = Date.now();
-      }
-      render();
-    };
-    socket.onclose = () => {
-      render();
-      setTimeout(connect, RECONNECT_MS);
-    };
+  function tick() {
+    for (const card of cards.values()) card.tick();
   }
 
-  setInterval(() => {
-    for (const card of cards.values()) card.tick();
-  }, TICK_MS);
-  render();
-  connect();
+  return { element, update, tick };
 }
 
 function createCard(send: (message: RemoteToAgent) => void) {
-  let view: View = { online: false, player: null, card: null, receivedAt: 0 };
-  // While a slider is held, incoming state doesn't move it.
+  let online = false;
+  // null for the placeholder card shown when no Source tab is open.
+  let card: SourceState | null = null;
+  let receivedAt = 0;
+  // While the slider is held, incoming state doesn't move it.
   let seeking = false;
-  let adjustingVolume = false;
 
-  const element = el('section', '', 'card');
-  const name = el('h2', 'Player');
-  const status = el('span', '', 'status');
-  const header = el('header');
-  header.append(name, status);
-
+  const element = el('div', '', 'card');
   const art = document.createElement('img');
   art.className = 'art';
   art.alt = '';
@@ -121,34 +108,22 @@ function createCard(send: (message: RemoteToAgent) => void) {
   progressRow.append(position, seekBar, duration);
 
   const previous = button('⏮', 'Previous', () => command({ type: 'previous' }));
-  const playPause = button('▶', 'Play', () => command({ type: view.card?.playing ? 'pause' : 'play' }));
+  const playPause = button('▶', 'Play', () => command({ type: card?.playing ? 'pause' : 'play' }));
   playPause.classList.add('play-pause');
   const next = button('⏭', 'Next', () => command({ type: 'next' }));
   const controls = el('div', '', 'controls');
   controls.append(previous, playPause, next);
 
-  const volume = slider('Volume');
-  volume.max = '100';
-  volume.addEventListener('input', () => (adjustingVolume = true));
-  volume.addEventListener('change', () => {
-    adjustingVolume = false;
-    send({ type: 'set-volume', volume: Number(volume.value) });
-  });
-  const volumeRow = el('label', '', 'volume');
-  volumeRow.append(el('span', '🔈'), volume, el('span', '🔊'));
-
-  element.append(header, now, progressRow, controls, volumeRow);
+  element.append(now, progressRow, controls);
 
   function command(command: SourceCommand) {
-    if (view.card) send({ type: 'command', source: view.card.source, command });
+    if (card) send({ type: 'command', source: card.source, command });
   }
 
-  function update(nextView: View) {
-    view = nextView;
-    const { online, player, card } = view;
-    name.textContent = player?.name ?? 'Player';
-    status.textContent = online ? 'Online' : 'Unavailable';
-    status.className = `status ${online ? 'online' : 'offline'}`;
+  function update(isOnline: boolean, state: SourceState | null, at: number) {
+    online = isOnline;
+    card = state;
+    receivedAt = at;
 
     const track = card?.track ?? null;
     art.hidden = meta.hidden = !track;
@@ -167,15 +142,10 @@ function createCard(send: (message: RemoteToAgent) => void) {
     const playing = !!card?.playing;
     playPause.textContent = playing ? '❚❚' : '▶';
     playPause.setAttribute('aria-label', playing ? 'Pause' : 'Play');
-
     tick();
-
-    volume.disabled = !online || player?.volume == null;
-    if (!adjustingVolume && player?.volume != null) volume.value = String(player.volume);
   }
 
   function tick() {
-    const { card, receivedAt } = view;
     const progress = card?.progress ? advance(card.progress, card.playing, Date.now() - receivedAt) : null;
     seekBar.disabled = !progress;
     if (seeking) return;
@@ -218,5 +188,16 @@ function clock(ms: number) {
   return `${minutes}:${seconds}`;
 }
 
-// One Player for now: the agent that served this page.
-connectPlayer(`ws://${location.host}${REMOTE_PATH}`);
+const groups: ReturnType<typeof createPlayerGroup>[] = [];
+watchPlayers(location.origin, (players) => {
+  players.forEach((player, index) => {
+    if (!groups[index]) {
+      groups[index] = createPlayerGroup();
+      container.append(groups[index].element);
+    }
+    groups[index].update(player);
+  });
+});
+setInterval(() => {
+  for (const group of groups) group.tick();
+}, TICK_MS);

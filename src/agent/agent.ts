@@ -5,9 +5,11 @@ import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   EXTENSION_PATH,
+  PLAYERS_PATH,
   REMOTE_PATH,
   type AgentToExtension,
   type AgentToRemote,
+  type PlayerEntry,
   type ExtensionToAgent,
   advance,
   SOURCE_ORDER,
@@ -29,6 +31,8 @@ export interface AgentOptions {
   extension: { port: number };
   // Directory holding the built Remote page; omitted in tests.
   staticDir?: string;
+  // Every Player on the tailnet, this one included (ADR-0003).
+  players: PlayerEntry[];
   mac: Mac;
   pingIntervalMs?: number;
   // How often to re-read system volume, to catch changes made on the Mac.
@@ -127,7 +131,13 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   });
 
   // Remote side: the page and its live connection. No auth (ADR-0002).
-  const remoteServer = createServer((req, res) => serveStatic(options.staticDir, req, res));
+  const remoteServer = createServer((req, res) => {
+    if (req.url === PLAYERS_PATH) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(options.players));
+      return;
+    }
+    void serveStatic(options.staticDir, req, res);
+  });
   const remoteSockets = new WebSocketServer({ noServer: true });
   remoteServer.on('upgrade', (req, socket, head) => {
     if (req.url !== REMOTE_PATH) {

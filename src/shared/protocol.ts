@@ -72,3 +72,12 @@ export const DEFAULT_REMOTE_PORT = 4848;
 export const DEFAULT_EXTENSION_PORT = 4849;
 export const EXTENSION_PATH = '/extension';
 export const REMOTE_PATH = '/remote';
+// Lists every Player the Remote should connect to, as PlayerEntry[].
+export const PLAYERS_PATH = '/players';
+
+export interface PlayerEntry {
+  // Shown until the Player's agent reports its own name.
+  label: string;
+  // The Player's Remote-facing socket.
+  url: string;
+}

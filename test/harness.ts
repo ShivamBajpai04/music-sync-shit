@@ -8,6 +8,7 @@ import {
   REMOTE_PATH,
   type AgentToExtension,
   type AgentToRemote,
+  type PlayerEntry,
   type ExtensionToAgent,
   type PlayerState,
   type Progress,
@@ -34,15 +35,24 @@ export class FakeMac implements Mac {
   }
 }
 
-export async function startTestAgent(name = 'Office Mac', mac = new FakeMac()) {
+export async function startTestAgent(
+  name = 'Office Mac',
+  mac = new FakeMac(),
+  { players = [], port = 0 }: { players?: PlayerEntry[]; port?: number } = {},
+) {
   const agent = await startAgent({
     name,
-    remote: { host: '127.0.0.1', port: 0 },
+    remote: { host: '127.0.0.1', port },
     extension: { port: 0 },
+    players,
     mac,
     volumePollMs: 20,
   });
   return { agent, mac };
+}
+
+export function playerEntry(label: string, agent: RunningAgent): PlayerEntry {
+  return { label, url: `ws://127.0.0.1:${agent.remotePort}${REMOTE_PATH}` };
 }
 
 // Stands in for the extension plus one Source tab. Behaves like a web player

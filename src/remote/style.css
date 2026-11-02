@@ -31,15 +31,17 @@ main {
   margin: 0 auto;
   padding: 16px;
 }
-.player { display: grid; gap: 16px; }
-.card {
+/* A Player: name, status and the Mac's volume, then one card per Source. */
+.player {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 16px;
 }
-.card header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.card h2 { margin: 0; font-size: 18px; }
+.player.offline .cards { opacity: 0.5; }
+.player header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.player h2 { margin: 0; font-size: 18px; }
+.card { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 4px; }
 .status { font-size: 13px; color: var(--muted); }
 .status.online::before { content: '● '; color: var(--accent); }
 .status.offline::before { content: '● '; color: var(--muted); }
