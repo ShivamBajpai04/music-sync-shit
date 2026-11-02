@@ -20,9 +20,8 @@ Same as [the Spotify Web checklist](./spotify-web.md#setup), but open https://mu
 
 ## With both Source tabs open
 
-- [ ] With Spotify playing and YouTube Music paused, skipping tracks in YouTube Music doesn't take the card away from Spotify.
-- [ ] Pausing Spotify and then playing YouTube Music switches the card to YouTube Music, and the card's buttons control YouTube Music.
-- [ ] With both playing, the Player shows two cards, Spotify first and then YouTube Music, whichever started first.
-- [ ] With two cards showing, each card's play/pause, next, previous and seek control only its own Source. Volume moves together on both cards.
-- [ ] Pausing either one goes back to a single card for the Source still playing.
-- [ ] Closing the tab the card is showing switches the card to the other Source.
+- [ ] With a track loaded in both, the Player shows two cards, Spotify first and then YouTube Music, whether each is playing or paused.
+- [ ] Pausing one while both play keeps its card, and ▶ on that card starts it again.
+- [ ] Each card's play/pause, next, previous and seek control only its own Source. Volume moves together on both cards.
+- [ ] A Source tab with nothing loaded (such as the YouTube Music home page) has no card while the other Source has a track.
+- [ ] Closing a Source tab removes its card.

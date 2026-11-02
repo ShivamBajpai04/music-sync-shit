@@ -30,8 +30,8 @@ export interface SourceState {
 
 export interface PlayerState {
   name: string;
-  // The Sources to show, one card each: the active Source, or every Source
-  // when more than one is playing. Empty when no Source tab is open.
+  // The Sources to show, one card each, in SOURCE_ORDER: every open Source
+  // tab with a track loaded. Empty when no Source tab is open.
   sources: SourceState[];
   // The Mac's system volume, 0-100; null if it couldn't be read.
   volume: number | null;

@@ -57,14 +57,15 @@ const CONTENT_TYPES: Record<string, string> = {
 
 export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   const sources = new Map<SourceId, SourceTab>();
-  // The Source shown when none is playing. See chooseActive.
-  let activeSource: SourceId | null = null;
   const remotes = new Set<WebSocket>();
   let volume = await readVolume(options.mac);
 
   function playerState(): PlayerState {
-    const playing = SOURCE_ORDER.filter((source) => sources.get(source)?.playing);
-    const shown = playing.length > 0 ? playing : activeSource ? [activeSource] : [];
+    // A card per open Source tab with a track loaded, playing or paused. If
+    // none has a track, the open tabs still get (empty) cards.
+    const open = SOURCE_ORDER.filter((source) => sources.has(source));
+    const loaded = open.filter((source) => sources.get(source)!.track);
+    const shown = loaded.length > 0 ? loaded : open;
     return { name: options.name, sources: shown.map(sourceState), volume };
   }
 
@@ -91,21 +92,6 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     tab.socket.send(JSON.stringify(message));
   }
 
-  // Every playing Source gets a card. The active Source is the one to show
-  // once nothing is playing: the last one to be the only one playing, or a
-  // newly opened tab when nothing is playing.
-  function chooseActive(reported: SourceId, isNewTab: boolean) {
-    const playing = [...sources].filter(([, tab]) => tab.playing);
-    if (playing.length === 1) activeSource = playing[0][0];
-    else if (playing.length === 0 && (!activeSource || isNewTab)) activeSource = reported;
-  }
-
-  function dropSource(source: SourceId) {
-    sources.delete(source);
-    if (activeSource !== source) return;
-    const remaining = [...sources];
-    activeSource = (remaining.find(([, tab]) => tab.playing) ?? remaining[0])?.[0] ?? null;
-  }
 
   // Extension side: localhost only, and only from a browser extension, so a
   // web page open in any browser on this Mac can't pose as a Source.
@@ -121,7 +107,6 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.on('message', (data) => {
         const message = JSON.parse(String(data)) as ExtensionToAgent;
         if (message.type === 'source-state') {
-          const isNewTab = !sources.has(message.source);
           sources.set(message.source, {
             socket: ws,
             track: message.track,
@@ -129,14 +114,13 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
             progress: message.progress,
             receivedAt: Date.now(),
           });
-          chooseActive(message.source, isNewTab);
         } else {
-          dropSource(message.source);
+          sources.delete(message.source);
         }
         broadcast();
       });
       ws.on('close', () => {
-        for (const [source, tab] of sources) if (tab.socket === ws) dropSource(source);
+        for (const [source, tab] of sources) if (tab.socket === ws) sources.delete(source);
         broadcast();
       });
     });
