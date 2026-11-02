@@ -52,6 +52,7 @@ chrome.runtime.onConnect.addListener((port) => {
       source,
       track: message.track,
       playing: message.playing,
+      progress: message.progress,
     };
     lastState.set(source, state);
     send(state);
