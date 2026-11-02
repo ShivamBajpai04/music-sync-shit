@@ -31,6 +31,7 @@ main {
   margin: 0 auto;
   padding: 16px;
 }
+.player { display: grid; gap: 16px; }
 .card {
   background: var(--card);
   border: 1px solid var(--border);

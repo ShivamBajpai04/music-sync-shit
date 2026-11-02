@@ -6,21 +6,89 @@ import {
   type PlayerState,
   type RemoteToAgent,
   type SourceCommand,
+  type SourceId,
+  type SourceState,
 } from '../shared/protocol.ts';
 
 const RECONNECT_MS = 2_000;
 const TICK_MS = 250;
 const container = document.getElementById('players')!;
 
+interface View {
+  online: boolean;
+  player: PlayerState | null;
+  // null for the placeholder card shown when no Source tab is open.
+  card: SourceState | null;
+  receivedAt: number;
+}
+
+// One Player's connection. It shows one card per Source the agent lists.
 function connectPlayer(url: string) {
   let socket: WebSocket | null = null;
-  let state: PlayerState | null = null;
+  let player: PlayerState | null = null;
   let receivedAt = 0;
+  const group = el('div', '', 'player');
+  container.append(group);
+  const cards = new Map<SourceId | 'none', ReturnType<typeof createCard>>();
+
+  function send(message: RemoteToAgent) {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  }
+
+  function render() {
+    const online = socket?.readyState === WebSocket.OPEN && player !== null;
+    const shown: (SourceState | null)[] = online && player!.sources.length ? player!.sources : [null];
+    const keys = shown.map((card) => card?.source ?? 'none');
+
+    for (const [key, card] of cards) {
+      if (!keys.includes(key)) {
+        card.element.remove();
+        cards.delete(key);
+      }
+    }
+    shown.forEach((state, index) => {
+      const key = keys[index];
+      let card = cards.get(key);
+      if (!card) {
+        card = createCard(send);
+        cards.set(key, card);
+      }
+      // Keeps the cards in SOURCE_ORDER; a no-op when already in place.
+      if (group.children[index] !== card.element) group.insertBefore(card.element, group.children[index] ?? null);
+      card.update({ online, player, card: state, receivedAt });
+    });
+  }
+
+  function connect() {
+    socket = new WebSocket(url);
+    socket.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as AgentToRemote;
+      if (message.type === 'state') {
+        player = message.state;
+        receivedAt = Date.now();
+      }
+      render();
+    };
+    socket.onclose = () => {
+      render();
+      setTimeout(connect, RECONNECT_MS);
+    };
+  }
+
+  setInterval(() => {
+    for (const card of cards.values()) card.tick();
+  }, TICK_MS);
+  render();
+  connect();
+}
+
+function createCard(send: (message: RemoteToAgent) => void) {
+  let view: View = { online: false, player: null, card: null, receivedAt: 0 };
   // While a slider is held, incoming state doesn't move it.
   let seeking = false;
   let adjustingVolume = false;
 
-  const card = el('section', '', 'card');
+  const element = el('section', '', 'card');
   const name = el('h2', 'Player');
   const status = el('span', '', 'status');
   const header = el('header');
@@ -53,7 +121,7 @@ function connectPlayer(url: string) {
   progressRow.append(position, seekBar, duration);
 
   const previous = button('⏮', 'Previous', () => command({ type: 'previous' }));
-  const playPause = button('▶', 'Play', () => command({ type: state?.playing ? 'pause' : 'play' }));
+  const playPause = button('▶', 'Play', () => command({ type: view.card?.playing ? 'pause' : 'play' }));
   playPause.classList.add('play-pause');
   const next = button('⏭', 'Next', () => command({ type: 'next' }));
   const controls = el('div', '', 'controls');
@@ -69,16 +137,20 @@ function connectPlayer(url: string) {
   const volumeRow = el('label', '', 'volume');
   volumeRow.append(el('span', '🔈'), volume, el('span', '🔊'));
 
-  card.append(header, now, progressRow, controls, volumeRow);
-  container.append(card);
+  element.append(header, now, progressRow, controls, volumeRow);
 
-  function render() {
-    const online = socket?.readyState === WebSocket.OPEN && state !== null;
-    name.textContent = state?.name ?? 'Player';
+  function command(command: SourceCommand) {
+    if (view.card) send({ type: 'command', source: view.card.source, command });
+  }
+
+  function update(nextView: View) {
+    view = nextView;
+    const { online, player, card } = view;
+    name.textContent = player?.name ?? 'Player';
     status.textContent = online ? 'Online' : 'Unavailable';
     status.className = `status ${online ? 'online' : 'offline'}`;
 
-    const track = online ? state!.track : null;
+    const track = card?.track ?? null;
     art.hidden = meta.hidden = !track;
     empty.hidden = !!track;
     if (track) {
@@ -86,27 +158,25 @@ function connectPlayer(url: string) {
       if (!track.artUrl) art.removeAttribute('src');
       title.textContent = track.title;
       artist.textContent = track.artist;
-      source.textContent = state!.source ? SOURCE_LABELS[state!.source] : '';
+      source.textContent = SOURCE_LABELS[card!.source];
     } else {
-      empty.textContent = online ? (state?.source ? 'Nothing playing' : 'No Source tab open') : '';
+      empty.textContent = !online ? '' : card ? `Nothing playing on ${SOURCE_LABELS[card.source]}` : 'No Source tab open';
     }
 
-    const hasSource = online && !!state?.source;
-    for (const control of [previous, playPause, next]) control.disabled = !hasSource;
-    const playing = hasSource && state!.playing;
+    for (const control of [previous, playPause, next]) control.disabled = !card;
+    const playing = !!card?.playing;
     playPause.textContent = playing ? '❚❚' : '▶';
     playPause.setAttribute('aria-label', playing ? 'Pause' : 'Play');
 
-    renderProgress();
+    tick();
 
-    volume.disabled = !online || state?.volume === null;
-    if (!adjustingVolume && state?.volume != null) volume.value = String(state.volume);
+    volume.disabled = !online || player?.volume == null;
+    if (!adjustingVolume && player?.volume != null) volume.value = String(player.volume);
   }
 
-  function renderProgress() {
-    const progress = state?.progress && socket?.readyState === WebSocket.OPEN
-      ? advance(state.progress, state.playing, Date.now() - receivedAt)
-      : null;
+  function tick() {
+    const { card, receivedAt } = view;
+    const progress = card?.progress ? advance(card.progress, card.playing, Date.now() - receivedAt) : null;
     seekBar.disabled = !progress;
     if (seeking) return;
     seekBar.max = String(progress?.durationMs ?? 0);
@@ -115,33 +185,7 @@ function connectPlayer(url: string) {
     duration.textContent = clock(progress?.durationMs ?? 0);
   }
 
-  function command(command: SourceCommand) {
-    send({ type: 'command', command });
-  }
-
-  function send(message: RemoteToAgent) {
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
-  }
-
-  function connect() {
-    socket = new WebSocket(url);
-    socket.onmessage = (event) => {
-      const message = JSON.parse(String(event.data)) as AgentToRemote;
-      if (message.type === 'state') {
-        state = message.state;
-        receivedAt = Date.now();
-      }
-      render();
-    };
-    socket.onclose = () => {
-      render();
-      setTimeout(connect, RECONNECT_MS);
-    };
-  }
-
-  setInterval(renderProgress, TICK_MS);
-  render();
-  connect();
+  return { element, update, tick };
 }
 
 function el(tag: string, text = '', className = '') {

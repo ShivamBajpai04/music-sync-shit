@@ -14,6 +14,7 @@ import {
   type RemoteToAgent,
   type SourceCommand,
   type SourceId,
+  type SourceState,
   type Track,
 } from '../src/shared/protocol.ts';
 
@@ -165,8 +166,11 @@ export class FakeRemote {
     return this.states.at(-1);
   }
 
-  send(command: SourceCommand) {
-    this.sendMessage({ type: 'command', command });
+  // Sends to the given Source, or to the first card's Source like a
+  // single-card Remote would.
+  send(command: SourceCommand, source?: SourceId) {
+    const target = source ?? this.latest?.sources[0]?.source ?? 'spotify';
+    this.sendMessage({ type: 'command', source: target, command });
   }
 
   setVolume(volume: number) {
@@ -195,6 +199,11 @@ export class FakeRemote {
   close() {
     this.socket.close();
   }
+}
+
+// The first card's Source, which is the only one unless several are playing.
+export function first(state: PlayerState): SourceState | undefined {
+  return state.sources[0];
 }
 
 export const TRACK_LENGTH_MS = 240_000;

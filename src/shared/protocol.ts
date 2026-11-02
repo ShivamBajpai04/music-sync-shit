@@ -20,15 +20,25 @@ export interface Progress {
   durationMs: number;
 }
 
-export interface PlayerState {
-  name: string;
-  source: SourceId | null;
+// One Source tab on a Player, as shown on its own card.
+export interface SourceState {
+  source: SourceId;
   track: Track | null;
   playing: boolean;
   progress: Progress | null;
+}
+
+export interface PlayerState {
+  name: string;
+  // The Sources to show, one card each, in SOURCE_ORDER: every open Source
+  // tab with a track loaded. Empty when no Source tab is open.
+  sources: SourceState[];
   // The Mac's system volume, 0-100; null if it couldn't be read.
   volume: number | null;
 }
+
+// Display order when several Sources are shown.
+export const SOURCE_ORDER: SourceId[] = ['spotify', 'youtube-music'];
 
 export type SourceCommand =
   | { type: 'play' }
@@ -39,7 +49,7 @@ export type SourceCommand =
 
 // Remote <-> agent, on the agent's tailnet address.
 export type RemoteToAgent =
-  | { type: 'command'; command: SourceCommand }
+  | { type: 'command'; source: SourceId; command: SourceCommand }
   | { type: 'set-volume'; volume: number };
 export type AgentToRemote = { type: 'state'; state: PlayerState };
 
