@@ -13,6 +13,8 @@ const COVER = 'img[data-testid="cover-art-image"]';
 const PROGRESS_BAR = '[data-testid="playback-progressbar"]';
 const POSITION = '[data-testid="playback-position"]';
 const DURATION = '[data-testid="playback-duration"]';
+// The big play button at the top of a track, album, playlist or artist page.
+const PAGE_PLAY = '[data-testid="action-bar-row"] [data-testid="play-button"]';
 
 function text(root: ParentNode, selector: string) {
   return root.querySelector(selector)?.textContent?.trim() ?? '';
@@ -93,8 +95,17 @@ function seek(positionMs: number) {
   }
 }
 
+function startLinked() {
+  const button = document.querySelector<HTMLButtonElement>(PAGE_PLAY);
+  if (!button) return 'waiting';
+  // Its label reads "Pause …" when this page's item is already playing.
+  if (!button.getAttribute('aria-label')?.startsWith('Pause')) button.click();
+  return 'started';
+}
+
 runSourceDriver({
   source: 'spotify',
+  startLinked,
   read: () => ({ track: readTrack(), playing: isPlaying(), progress: readProgress() }),
   run(command) {
     switch (command.type) {

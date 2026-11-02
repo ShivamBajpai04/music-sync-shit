@@ -50,8 +50,13 @@ export type SourceCommand =
 // Remote <-> agent, on the agent's tailnet address.
 export type RemoteToAgent =
   | { type: 'command'; source: SourceId; command: SourceCommand }
-  | { type: 'set-volume'; volume: number };
-export type AgentToRemote = { type: 'state'; state: PlayerState };
+  | { type: 'set-volume'; volume: number }
+  // A pasted Spotify or YouTube Music link to start playing on this Player.
+  | { type: 'start-link'; link: string };
+export type AgentToRemote =
+  | { type: 'state'; state: PlayerState }
+  // Sent only to the Remote whose request failed.
+  | { type: 'error'; message: string };
 
 // Extension <-> agent, on localhost.
 export type ExtensionToAgent =
@@ -59,8 +64,14 @@ export type ExtensionToAgent =
   | { type: 'source-closed'; source: SourceId };
 export type AgentToExtension =
   | { type: 'command'; source: SourceId; command: SourceCommand }
+  // Navigate the Source's open tab to url (which carries START_MARKER).
+  | { type: 'open'; source: SourceId; url: string }
   // Keeps the extension's service worker alive; it has no other meaning.
   | { type: 'ping' };
+
+// Added as the URL hash of a link being started. A Source driver that loads
+// with it presses play, then removes it.
+export const START_MARKER = 'music-sync-play';
 
 // Where a progress estimate is after elapsedMs more time.
 export function advance(progress: Progress, playing: boolean, elapsedMs: number): Progress {

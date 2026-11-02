@@ -23,8 +23,13 @@ export class FakeMac implements Mac {
   opened: string[] = [];
   volume = 50;
   failVolume = false;
+  failOpen = false;
+  // Lets a test make the opened tab appear, as Arc would.
+  onOpen: (url: string) => void = () => {};
   async openInArc(url: string) {
+    if (this.failOpen) throw new Error('open failed');
     this.opened.push(url);
+    this.onOpen(url);
   }
   async getVolume() {
     if (this.failVolume) throw new Error('osascript failed');
@@ -68,6 +73,7 @@ export class FakeSource {
   playing: boolean;
   progress: Progress | null;
   received: SourceCommand[] = [];
+  navigatedTo: string[] = [];
 
   constructor(agent: RunningAgent, source: SourceId, tracks: Track | Track[] | null, playing = false) {
     this.agent = agent;
@@ -86,9 +92,15 @@ export class FakeSource {
     });
     this.socket.on('message', (data) => {
       const message = JSON.parse(String(data)) as AgentToExtension;
-      if (message.type !== 'command' || message.source !== this.source) return;
-      this.received.push(message.command);
-      this.run(message.command);
+      if (message.type === 'ping' || message.source !== this.source) return;
+      if (message.type === 'open') {
+        // Like the real driver after loading a started link.
+        this.navigatedTo.push(message.url);
+        this.playing = true;
+      } else {
+        this.received.push(message.command);
+        this.run(message.command);
+      }
       this.report();
     });
     this.report();
@@ -158,12 +170,14 @@ export class FakeSource {
 export class FakeRemote {
   private socket!: WebSocket;
   states: PlayerState[] = [];
+  errors: string[] = [];
 
   async connect(agent: RunningAgent) {
     this.socket = new WebSocket(`ws://127.0.0.1:${agent.remotePort}${REMOTE_PATH}`);
     this.socket.on('message', (data) => {
       const message = JSON.parse(String(data)) as AgentToRemote;
       if (message.type === 'state') this.states.push(message.state);
+      else this.errors.push(message.message);
     });
     await new Promise<void>((resolve, reject) => {
       this.socket.once('open', resolve);
@@ -181,6 +195,22 @@ export class FakeRemote {
   send(command: SourceCommand, source?: SourceId) {
     const target = source ?? this.latest?.sources[0]?.source ?? 'spotify';
     this.sendMessage({ type: 'command', source: target, command });
+  }
+
+  startLink(link: string) {
+    this.sendMessage({ type: 'start-link', link });
+  }
+
+  waitForError(timeoutMs = 1000) {
+    return new Promise<string>((resolve, reject) => {
+      const started = Date.now();
+      const check = () => {
+        if (this.errors.length) return resolve(this.errors.at(-1)!);
+        if (Date.now() - started > timeoutMs) return reject(new Error('No error received'));
+        setTimeout(check, 5);
+      };
+      check();
+    });
   }
 
   setVolume(volume: number) {
