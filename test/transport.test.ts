@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RunningAgent } from '../src/agent/agent.ts';
-import { FakeMac, FakeRemote, FakeSource, OTHER_SONG, SONG, TRACK_LENGTH_MS, startTestAgent } from './harness.ts';
+import { FakeMac, FakeRemote, FakeSource, OTHER_SONG, SONG, TRACK_LENGTH_MS, startTestAgent , first } from './harness.ts';
 
 const THIRD_SONG = { title: 'Unfinished Sympathy', artist: 'Massive Attack', artUrl: null };
 
@@ -15,7 +15,7 @@ describe('transport', () => {
     ({ agent, mac } = await startTestAgent());
     remote = await new FakeRemote().connect(agent);
     source = await new FakeSource(agent, 'spotify', [SONG, OTHER_SONG, THIRD_SONG], true).connect();
-    await remote.waitFor((s) => s.track?.title === 'Teardrop');
+    await remote.waitFor((s) => first(s)?.track?.title === 'Teardrop');
   });
 
   afterEach(async () => {
@@ -25,53 +25,53 @@ describe('transport', () => {
 
   it('skips to the next track', async () => {
     remote.send({ type: 'next' });
-    const state = await remote.waitFor((s) => s.track?.title === 'Angel');
-    assert.equal(state.progress?.durationMs, TRACK_LENGTH_MS);
-    assert.ok(state.progress!.positionMs < 1_000);
+    const state = await remote.waitFor((s) => first(s)?.track?.title === 'Angel');
+    assert.equal(first(state)?.progress?.durationMs, TRACK_LENGTH_MS);
+    assert.ok(first(state)!.progress!.positionMs < 1_000);
   });
 
   it('goes back to the previous track near the start of a track', async () => {
     remote.send({ type: 'next' });
-    await remote.waitFor((s) => s.track?.title === 'Angel');
+    await remote.waitFor((s) => first(s)?.track?.title === 'Angel');
     remote.send({ type: 'previous' });
-    await remote.waitFor((s) => s.track?.title === 'Teardrop');
+    await remote.waitFor((s) => first(s)?.track?.title === 'Teardrop');
   });
 
   it('restarts the track on previous once it is under way', async () => {
     remote.send({ type: 'next' });
-    await remote.waitFor((s) => s.track?.title === 'Angel');
+    await remote.waitFor((s) => first(s)?.track?.title === 'Angel');
     source.setLocally({ positionMs: 60_000 });
-    await remote.waitFor((s) => (s.progress?.positionMs ?? 0) >= 60_000);
+    await remote.waitFor((s) => (first(s)?.progress?.positionMs ?? 0) >= 60_000);
 
     remote.send({ type: 'previous' });
-    const state = await remote.waitFor((s) => (s.progress?.positionMs ?? Infinity) < 1_000);
-    assert.equal(state.track?.title, 'Angel');
+    const state = await remote.waitFor((s) => (first(s)?.progress?.positionMs ?? Infinity) < 1_000);
+    assert.equal(first(state)?.track?.title, 'Angel');
   });
 
   it('seeks to a position', async () => {
     remote.send({ type: 'seek', positionMs: 90_000 });
-    const state = await remote.waitFor((s) => (s.progress?.positionMs ?? 0) >= 90_000);
-    assert.ok(state.progress!.positionMs < 91_000);
+    const state = await remote.waitFor((s) => (first(s)?.progress?.positionMs ?? 0) >= 90_000);
+    assert.ok(first(state)!.progress!.positionMs < 91_000);
     assert.deepEqual(source.received, [{ type: 'seek', positionMs: 90_000 }]);
   });
 
   it('advances the position between reports while playing', async () => {
     source.setLocally({ positionMs: 10_000 });
-    await remote.waitFor((s) => (s.progress?.positionMs ?? 0) >= 10_000);
+    await remote.waitFor((s) => (first(s)?.progress?.positionMs ?? 0) >= 10_000);
     await new Promise((resolve) => setTimeout(resolve, 200));
     // Any later broadcast carries the position as of when it was sent.
     mac.volume = 51;
     const state = await remote.waitFor((s) => s.volume === 51);
-    assert.ok(state.progress!.positionMs >= 10_150, `position ${state.progress!.positionMs}`);
+    assert.ok(first(state)!.progress!.positionMs >= 10_150, `position ${first(state)!.progress!.positionMs}`);
   });
 
   it('holds the position while paused', async () => {
     source.setLocally({ positionMs: 10_000, playing: false });
-    await remote.waitFor((s) => !s.playing);
+    await remote.waitFor((s) => !first(s)?.playing);
     await new Promise((resolve) => setTimeout(resolve, 100));
     mac.volume = 51;
     const state = await remote.waitFor((s) => s.volume === 51);
-    assert.equal(state.progress!.positionMs, 10_000);
+    assert.equal(first(state)!.progress!.positionMs, 10_000);
   });
 
   it('never estimates a position past the end of the track', async () => {
@@ -79,7 +79,7 @@ describe('transport', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     mac.volume = 51;
     const state = await remote.waitFor((s) => s.volume === 51);
-    assert.equal(state.progress!.positionMs, TRACK_LENGTH_MS);
+    assert.equal(first(state)!.progress!.positionMs, TRACK_LENGTH_MS);
   });
 });
 
@@ -101,7 +101,7 @@ describe('system volume', () => {
 
   it('shows the Mac volume, even with no Source tab open', async () => {
     const state = await remote.waitFor(() => true);
-    assert.equal(state.source, null);
+    assert.deepEqual(state.sources, []);
     assert.equal(state.volume, 50);
   });
 

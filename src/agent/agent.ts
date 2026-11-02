@@ -10,11 +10,13 @@ import {
   type AgentToRemote,
   type ExtensionToAgent,
   advance,
+  SOURCE_ORDER,
   type PlayerState,
   type Progress,
   type RemoteToAgent,
   type SourceCommand,
   type SourceId,
+  type SourceState,
   type Track,
 } from '../shared/protocol.ts';
 import type { Mac } from './mac.ts';
@@ -55,20 +57,24 @@ const CONTENT_TYPES: Record<string, string> = {
 
 export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   const sources = new Map<SourceId, SourceTab>();
-  // The Source the Player card shows: the one that most recently reported state.
+  // The Source shown when none is playing. See chooseActive.
   let activeSource: SourceId | null = null;
   const remotes = new Set<WebSocket>();
   let volume = await readVolume(options.mac);
 
   function playerState(): PlayerState {
-    const tab = activeSource ? sources.get(activeSource) : undefined;
+    const playing = SOURCE_ORDER.filter((source) => sources.get(source)?.playing);
+    const shown = playing.length > 0 ? playing : activeSource ? [activeSource] : [];
+    return { name: options.name, sources: shown.map(sourceState), volume };
+  }
+
+  function sourceState(source: SourceId): SourceState {
+    const tab = sources.get(source)!;
     return {
-      name: options.name,
-      source: tab ? activeSource : null,
-      track: tab?.track ?? null,
-      playing: tab?.playing ?? false,
-      progress: tab?.progress ? advance(tab.progress, tab.playing, Date.now() - tab.receivedAt) : null,
-      volume,
+      source,
+      track: tab.track,
+      playing: tab.playing,
+      progress: tab.progress ? advance(tab.progress, tab.playing, Date.now() - tab.receivedAt) : null,
     };
   }
 
@@ -78,17 +84,27 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     for (const remote of remotes) remote.send(data);
   }
 
-  function sendCommand(command: SourceCommand) {
-    if (!activeSource) return;
-    const tab = sources.get(activeSource);
+  function sendCommand(source: SourceId, command: SourceCommand) {
+    const tab = sources.get(source);
     if (!tab) return;
-    const message: AgentToExtension = { type: 'command', source: activeSource, command };
+    const message: AgentToExtension = { type: 'command', source, command };
     tab.socket.send(JSON.stringify(message));
+  }
+
+  // Every playing Source gets a card. The active Source is the one to show
+  // once nothing is playing: the last one to be the only one playing, or a
+  // newly opened tab when nothing is playing.
+  function chooseActive(reported: SourceId, isNewTab: boolean) {
+    const playing = [...sources].filter(([, tab]) => tab.playing);
+    if (playing.length === 1) activeSource = playing[0][0];
+    else if (playing.length === 0 && (!activeSource || isNewTab)) activeSource = reported;
   }
 
   function dropSource(source: SourceId) {
     sources.delete(source);
-    if (activeSource === source) activeSource = sources.keys().next().value ?? null;
+    if (activeSource !== source) return;
+    const remaining = [...sources];
+    activeSource = (remaining.find(([, tab]) => tab.playing) ?? remaining[0])?.[0] ?? null;
   }
 
   // Extension side: localhost only, and only from a browser extension, so a
@@ -105,6 +121,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.on('message', (data) => {
         const message = JSON.parse(String(data)) as ExtensionToAgent;
         if (message.type === 'source-state') {
+          const isNewTab = !sources.has(message.source);
           sources.set(message.source, {
             socket: ws,
             track: message.track,
@@ -112,7 +129,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
             progress: message.progress,
             receivedAt: Date.now(),
           });
-          activeSource = message.source;
+          chooseActive(message.source, isNewTab);
         } else {
           dropSource(message.source);
         }
@@ -139,7 +156,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.send(JSON.stringify(hello));
       ws.on('message', (data) => {
         const message = JSON.parse(String(data)) as RemoteToAgent;
-        if (message.type === 'command') sendCommand(message.command);
+        if (message.type === 'command') sendCommand(message.source, message.command);
         else void setVolume(message.volume);
       });
       ws.on('close', () => remotes.delete(ws));

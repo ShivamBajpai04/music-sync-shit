@@ -19,9 +19,19 @@
         "spotify.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://music.youtube.com/*"
+      ],
+      "js": [
+        "youtube-music.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "host_permissions": [
-    "https://open.spotify.com/*"
+    "https://open.spotify.com/*",
+    "https://music.youtube.com/*"
   ]
 }

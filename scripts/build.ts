@@ -8,6 +8,7 @@ await build({
   entryPoints: {
     background: 'src/extension/background.ts',
     spotify: 'src/extension/drivers/spotify.ts',
+    'youtube-music': 'src/extension/drivers/youtube-music.ts',
   },
   outdir: 'dist/extension',
   bundle: true,
