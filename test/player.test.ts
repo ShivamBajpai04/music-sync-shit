@@ -21,13 +21,22 @@ describe('a single Player', () => {
 
   it('shows the Player with no Source before any tab connects', async () => {
     const state = await remote.waitFor(() => true);
-    assert.deepEqual(state, { name: 'Office Mac', source: null, track: null, playing: false });
+    assert.deepEqual(state, {
+      name: 'Office Mac',
+      source: null,
+      track: null,
+      playing: false,
+      progress: null,
+      volume: 50,
+    });
   });
 
   it('streams the Source, track and playing state', async () => {
     await new FakeSource(agent, 'spotify', SONG, true).connect();
     const state = await remote.waitFor((s) => s.source === 'spotify');
-    assert.deepEqual(state, { name: 'Office Mac', source: 'spotify', track: SONG, playing: true });
+    assert.equal(state.source, 'spotify');
+    assert.deepEqual(state.track, SONG);
+    assert.equal(state.playing, true);
   });
 
   it('sends state to a Remote that connects after the Source', async () => {

@@ -10,6 +10,7 @@ import {
   type AgentToRemote,
   type ExtensionToAgent,
   type PlayerState,
+  type Progress,
   type RemoteToAgent,
   type SourceCommand,
   type SourceId,
@@ -18,37 +19,52 @@ import {
 
 export class FakeMac implements Mac {
   opened: string[] = [];
+  volume = 50;
+  failVolume = false;
   async openInArc(url: string) {
     this.opened.push(url);
   }
+  async getVolume() {
+    if (this.failVolume) throw new Error('osascript failed');
+    return this.volume;
+  }
+  async setVolume(volume: number) {
+    this.volume = volume;
+  }
 }
 
-export async function startTestAgent(name = 'Office Mac') {
-  const mac = new FakeMac();
+export async function startTestAgent(name = 'Office Mac', mac = new FakeMac()) {
   const agent = await startAgent({
     name,
     remote: { host: '127.0.0.1', port: 0 },
     extension: { port: 0 },
     mac,
+    volumePollMs: 20,
   });
   return { agent, mac };
 }
 
-// Stands in for the extension plus one Source tab. Behaves like a web player:
-// play and pause commands change its state, which it reports back.
+// Stands in for the extension plus one Source tab. Behaves like a web player
+// working through a playlist: commands change its state, which it reports
+// back. Position doesn't advance by itself; set it with setLocally.
 export class FakeSource {
   private socket!: WebSocket;
   private agent: RunningAgent;
   readonly source: SourceId;
+  playlist: Track[];
+  index = 0;
   track: Track | null;
   playing: boolean;
+  progress: Progress | null;
   received: SourceCommand[] = [];
 
-  constructor(agent: RunningAgent, source: SourceId, track: Track | null, playing = false) {
+  constructor(agent: RunningAgent, source: SourceId, tracks: Track | Track[] | null, playing = false) {
     this.agent = agent;
     this.source = source;
-    this.track = track;
+    this.playlist = tracks === null ? [] : [tracks].flat();
+    this.track = this.playlist[0] ?? null;
     this.playing = playing;
+    this.progress = this.track ? { positionMs: 0, durationMs: TRACK_LENGTH_MS } : null;
   }
 
   async connect(origin = 'chrome-extension://fake') {
@@ -61,17 +77,46 @@ export class FakeSource {
       const message = JSON.parse(String(data)) as AgentToExtension;
       if (message.type !== 'command' || message.source !== this.source) return;
       this.received.push(message.command);
-      this.playing = message.command.type === 'play';
+      this.run(message.command);
       this.report();
     });
     this.report();
     return this;
   }
 
+  private run(command: SourceCommand) {
+    switch (command.type) {
+      case 'play':
+      case 'pause':
+        this.playing = command.type === 'play';
+        break;
+      case 'next':
+        this.goTo(this.index + 1);
+        break;
+      case 'previous':
+        // Like the real players: restart the track unless it's near the start.
+        if ((this.progress?.positionMs ?? 0) > 3_000) this.goTo(this.index);
+        else this.goTo(this.index - 1);
+        break;
+      case 'seek':
+        if (this.progress) this.progress = { ...this.progress, positionMs: command.positionMs };
+        break;
+    }
+  }
+
+  private goTo(index: number) {
+    this.index = Math.max(0, Math.min(this.playlist.length - 1, index));
+    this.track = this.playlist[this.index] ?? null;
+    this.progress = this.track ? { positionMs: 0, durationMs: TRACK_LENGTH_MS } : null;
+  }
+
   // A change made on the Mac itself, not from the Remote.
-  setLocally(change: { track?: Track | null; playing?: boolean }) {
+  setLocally(change: { track?: Track | null; playing?: boolean; positionMs?: number }) {
     if (change.track !== undefined) this.track = change.track;
     if (change.playing !== undefined) this.playing = change.playing;
+    if (change.positionMs !== undefined && this.progress) {
+      this.progress = { ...this.progress, positionMs: change.positionMs };
+    }
     this.report();
   }
 
@@ -84,7 +129,13 @@ export class FakeSource {
   }
 
   private report() {
-    this.send({ type: 'source-state', source: this.source, track: this.track, playing: this.playing });
+    this.send({
+      type: 'source-state',
+      source: this.source,
+      track: this.track,
+      playing: this.playing,
+      progress: this.progress,
+    });
   }
 
   private send(message: ExtensionToAgent) {
@@ -115,7 +166,14 @@ export class FakeRemote {
   }
 
   send(command: SourceCommand) {
-    const message: RemoteToAgent = { type: 'command', command };
+    this.sendMessage({ type: 'command', command });
+  }
+
+  setVolume(volume: number) {
+    this.sendMessage({ type: 'set-volume', volume });
+  }
+
+  private sendMessage(message: RemoteToAgent) {
     this.socket.send(JSON.stringify(message));
   }
 
@@ -139,5 +197,6 @@ export class FakeRemote {
   }
 }
 
+export const TRACK_LENGTH_MS = 240_000;
 export const SONG: Track = { title: 'Teardrop', artist: 'Massive Attack', artUrl: 'https://i.scdn.co/image/teardrop' };
 export const OTHER_SONG: Track = { title: 'Angel', artist: 'Massive Attack', artUrl: null };

@@ -9,7 +9,9 @@ import {
   type AgentToExtension,
   type AgentToRemote,
   type ExtensionToAgent,
+  advance,
   type PlayerState,
+  type Progress,
   type RemoteToAgent,
   type SourceCommand,
   type SourceId,
@@ -27,6 +29,8 @@ export interface AgentOptions {
   staticDir?: string;
   mac: Mac;
   pingIntervalMs?: number;
+  // How often to re-read system volume, to catch changes made on the Mac.
+  volumePollMs?: number;
 }
 
 export interface RunningAgent {
@@ -39,6 +43,8 @@ interface SourceTab {
   socket: WebSocket;
   track: Track | null;
   playing: boolean;
+  progress: Progress | null;
+  receivedAt: number;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -52,6 +58,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   // The Source the Player card shows: the one that most recently reported state.
   let activeSource: SourceId | null = null;
   const remotes = new Set<WebSocket>();
+  let volume = await readVolume(options.mac);
 
   function playerState(): PlayerState {
     const tab = activeSource ? sources.get(activeSource) : undefined;
@@ -60,6 +67,8 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       source: tab ? activeSource : null,
       track: tab?.track ?? null,
       playing: tab?.playing ?? false,
+      progress: tab?.progress ? advance(tab.progress, tab.playing, Date.now() - tab.receivedAt) : null,
+      volume,
     };
   }
 
@@ -96,7 +105,13 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.on('message', (data) => {
         const message = JSON.parse(String(data)) as ExtensionToAgent;
         if (message.type === 'source-state') {
-          sources.set(message.source, { socket: ws, track: message.track, playing: message.playing });
+          sources.set(message.source, {
+            socket: ws,
+            track: message.track,
+            playing: message.playing,
+            progress: message.progress,
+            receivedAt: Date.now(),
+          });
           activeSource = message.source;
         } else {
           dropSource(message.source);
@@ -125,10 +140,29 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.on('message', (data) => {
         const message = JSON.parse(String(data)) as RemoteToAgent;
         if (message.type === 'command') sendCommand(message.command);
+        else void setVolume(message.volume);
       });
       ws.on('close', () => remotes.delete(ws));
     });
   });
+
+  async function setVolume(requested: number) {
+    const clamped = Math.max(0, Math.min(100, Math.round(requested)));
+    try {
+      await options.mac.setVolume(clamped);
+    } catch (error) {
+      console.error('Setting volume failed:', error);
+    }
+    volume = await readVolume(options.mac);
+    broadcast();
+  }
+
+  const volumePoll = setInterval(async () => {
+    const current = await readVolume(options.mac);
+    if (current === volume) return;
+    volume = current;
+    broadcast();
+  }, options.volumePollMs ?? 2_000);
 
   const ping = setInterval(() => {
     const message: AgentToExtension = { type: 'ping' };
@@ -143,10 +177,19 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     extensionPort: (extensionServer.address() as AddressInfo).port,
     async close() {
       clearInterval(ping);
+      clearInterval(volumePoll);
       for (const ws of [...extensionSockets.clients, ...remoteSockets.clients]) ws.terminate();
       await Promise.all([closeServer(extensionServer), closeServer(remoteServer)]);
     },
   };
+}
+
+async function readVolume(mac: Mac) {
+  try {
+    return await mac.getVolume();
+  } catch {
+    return null;
+  }
 }
 
 async function serveStatic(dir: string | undefined, req: IncomingMessage, res: ServerResponse) {
