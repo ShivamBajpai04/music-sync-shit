@@ -9,6 +9,8 @@ export interface PlayerConnection {
   // The last state received; kept while offline, but stale.
   state: PlayerState | null;
   receivedAt: number;
+  // The last error this Remote's own request caused, until the next request.
+  error: string | null;
   send(message: RemoteToAgent): void;
 }
 
@@ -55,8 +57,14 @@ export function watchPlayers(
       online: false,
       state: null,
       receivedAt: 0,
+      error: null,
       send(message) {
-        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+        if (socket?.readyState !== WebSocket.OPEN) return;
+        if (player.error) {
+          player.error = null;
+          onChange(players);
+        }
+        socket.send(JSON.stringify(message));
       },
     };
 
@@ -65,10 +73,13 @@ export function watchPlayers(
       sockets.add(socket);
       socket.onmessage = (event) => {
         const message = JSON.parse(String(event.data)) as AgentToRemote;
-        if (message.type !== 'state') return;
-        player.state = message.state;
-        player.receivedAt = Date.now();
-        player.online = true;
+        if (message.type === 'error') {
+          player.error = message.message;
+        } else {
+          player.state = message.state;
+          player.receivedAt = Date.now();
+          player.online = true;
+        }
         onChange(players);
       };
       socket.onclose = () => {

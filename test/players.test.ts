@@ -123,6 +123,19 @@ describe('two Players', () => {
     await remote.waitFor((p) => p[1].online && p[1].title === 'Angel');
   });
 
+  it('shows a link error on the Player it came from, until the next request', async () => {
+    remote = openRemote(office);
+    await remote.waitFor((p) => p.every((player) => player.online));
+
+    remote.players()[1].send({ type: 'start-link', link: 'https://example.com' });
+    await remote.waitFor(() => remote!.players()[1].error !== null);
+    assert.match(remote.players()[1].error!, /Not a Spotify or YouTube Music link/);
+    assert.equal(remote.players()[0].error, null);
+
+    remote.players()[1].send({ type: 'set-volume', volume: 10 });
+    assert.equal(remote.players()[1].error, null);
+  });
+
   it('shows a Player that is down when the Remote opens as unavailable, under its label', async () => {
     await bedroom.close();
     remote = openRemote(office);

@@ -13,6 +13,7 @@ import {
   type ExtensionToAgent,
   advance,
   SOURCE_ORDER,
+  START_MARKER,
   type PlayerState,
   type Progress,
   type RemoteToAgent,
@@ -21,6 +22,7 @@ import {
   type SourceState,
   type Track,
 } from '../shared/protocol.ts';
+import { parseLink } from './links.ts';
 import type { Mac } from './mac.ts';
 
 export interface AgentOptions {
@@ -151,11 +153,41 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.on('message', (data) => {
         const message = JSON.parse(String(data)) as RemoteToAgent;
         if (message.type === 'command') sendCommand(message.source, message.command);
-        else void setVolume(message.volume);
+        else if (message.type === 'set-volume') void setVolume(message.volume);
+        else void startLink(message.link, ws);
       });
       ws.on('close', () => remotes.delete(ws));
     });
   });
+
+  async function startLink(link: string, requester: WebSocket) {
+    const parsed = parseLink(link);
+    if ('error' in parsed) {
+      const message: AgentToRemote = { type: 'error', message: parsed.error };
+      requester.send(JSON.stringify(message));
+      return;
+    }
+    // Only one Source plays at a time when starting something new; the other
+    // is paused, not closed, so it can be resumed.
+    for (const [source, tab] of sources) {
+      if (source !== parsed.source && tab.playing) sendCommand(source, { type: 'pause' });
+    }
+    const url = `${parsed.url}#${START_MARKER}`;
+    const tab = sources.get(parsed.source);
+    if (tab) {
+      const message: AgentToExtension = { type: 'open', source: parsed.source, url };
+      tab.socket.send(JSON.stringify(message));
+      return;
+    }
+    // No tab for this Source: Arc opens one, launching first if needed.
+    try {
+      await options.mac.openInArc(url);
+    } catch (error) {
+      console.error('Opening Arc failed:', error);
+      const message: AgentToRemote = { type: 'error', message: 'Couldn’t open Arc on this Mac' };
+      requester.send(JSON.stringify(message));
+    }
+  }
 
   async function setVolume(requested: number) {
     const clamped = Math.max(0, Math.min(100, Math.round(requested)));

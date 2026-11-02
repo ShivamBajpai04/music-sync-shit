@@ -27,8 +27,25 @@ function createPlayerGroup() {
   const volumeRow = el('label', '', 'volume');
   volumeRow.append(el('span', '🔈'), volume, el('span', '🔊'));
 
+  const link = document.createElement('input');
+  link.type = 'url';
+  link.placeholder = 'Paste a Spotify or YouTube Music link';
+  link.setAttribute('aria-label', 'Link to play');
+  const start = button('Play', 'Play link', () => {});
+  start.type = 'submit';
+  const linkForm = document.createElement('form');
+  linkForm.className = 'link';
+  linkForm.append(link, start);
+  linkForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!link.value.trim()) return;
+    player?.send({ type: 'start-link', link: link.value });
+    link.value = '';
+  });
+  const error = el('div', '', 'error');
+
   const cardList = el('div', '', 'cards');
-  element.append(header, volumeRow, cardList);
+  element.append(header, volumeRow, linkForm, error, cardList);
   const cards = new Map<SourceId | 'none', ReturnType<typeof createCard>>();
 
   function update(next: PlayerConnection) {
@@ -38,6 +55,10 @@ function createPlayerGroup() {
     status.textContent = online ? 'Online' : 'Unavailable';
     status.className = `status ${online ? 'online' : 'offline'}`;
     element.classList.toggle('offline', !online);
+
+    link.disabled = start.disabled = !online;
+    error.textContent = player.error ?? '';
+    error.hidden = !player.error;
 
     volume.disabled = !online || state?.volume == null;
     if (!adjustingVolume && state?.volume != null) volume.value = String(state.volume);

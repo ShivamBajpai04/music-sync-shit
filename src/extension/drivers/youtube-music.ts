@@ -13,6 +13,12 @@ const THUMBNAIL = `${PLAYER_BAR} img.image`;
 // YouTube Music plays through a regular media element, which is more reliable
 // than the player bar for position, duration and playing state.
 const VIDEO = 'ytmusic-player video, video.html5-main-video';
+// The play button at the top of a playlist, album or artist page.
+const PAGE_PLAY = [
+  'ytmusic-responsive-header-renderer ytmusic-play-button-renderer',
+  'ytmusic-detail-header-renderer ytmusic-play-button-renderer',
+  'ytmusic-immersive-header-renderer ytmusic-play-button-renderer',
+].join(', ');
 
 function video() {
   return document.querySelector<HTMLVideoElement>(VIDEO);
@@ -47,8 +53,23 @@ function readProgress(): Progress | null {
   return { positionMs: Math.round(media.currentTime * 1000), durationMs: Math.round(media.duration * 1000) };
 }
 
+function startLinked() {
+  if (location.pathname !== '/watch') {
+    const button = document.querySelector<HTMLElement>(PAGE_PLAY);
+    if (!button) return 'waiting';
+    button.click();
+    return 'started';
+  }
+  // Song links usually start by themselves; press play if one hasn't.
+  if (isPlaying()) return 'started';
+  const media = video();
+  if (media && media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) click(PLAY_PAUSE);
+  return 'waiting';
+}
+
 runSourceDriver({
   source: 'youtube-music',
+  startLinked,
   read: () => {
     const track = readTrack();
     return { track, playing: !!track && isPlaying(), progress: track ? readProgress() : null };

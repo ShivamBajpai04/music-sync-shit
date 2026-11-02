@@ -1,16 +1,21 @@
 // Runs one Source driver inside its tab: reports state changes to the
 // background service worker and carries out commands it sends back.
-import { advance, type Progress, type SourceCommand, type SourceId, type Track } from '../shared/protocol.ts';
+import { START_MARKER, advance, type Progress, type SourceCommand, type SourceId, type Track } from '../shared/protocol.ts';
 import type { BackgroundToTab, TabToBackground } from './messages.ts';
 
 export interface SourceDriver {
   source: SourceId;
   read(): { track: Track | null; playing: boolean; progress: Progress | null };
   run(command: SourceCommand): void;
+  // Called repeatedly after the page loads from a started link, until it
+  // returns 'started': press whatever starts the linked item playing.
+  startLinked(): 'started' | 'waiting';
 }
 
 const POLL_MS = 1_000;
 const RECONNECT_MS = 1_000;
+const START_RETRY_MS = 1_000;
+const START_GIVE_UP_MS = 20_000;
 // Position is only reported when it strays this far from where the receiver
 // would estimate it to be, i.e. after a seek or a stall.
 const DRIFT_MS = 1_500;
@@ -73,5 +78,23 @@ export function runSourceDriver(driver: SourceDriver) {
     clearInterval(poll);
   }
 
+  // A link to the page already open only changes the hash, without a reload.
+  const checkForStart = () => {
+    if (location.hash === `#${START_MARKER}`) startLinked(driver);
+  };
+  window.addEventListener('hashchange', checkForStart);
+  checkForStart();
+
   connect();
+}
+
+function startLinked(driver: SourceDriver) {
+  // Remove the marker so a reload doesn't start it again.
+  history.replaceState(history.state, '', location.pathname + location.search);
+  const startedAt = Date.now();
+  const attempt = () => {
+    if (driver.startLinked() === 'started' || Date.now() - startedAt > START_GIVE_UP_MS) return;
+    setTimeout(attempt, START_RETRY_MS);
+  };
+  attempt();
 }

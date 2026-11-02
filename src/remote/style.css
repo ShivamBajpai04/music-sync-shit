@@ -66,3 +66,14 @@ main {
   background: var(--text); color: var(--bg);
 }
 .controls button:disabled { opacity: 0.3; cursor: default; }
+.link { display: flex; gap: 8px; margin-top: 12px; }
+.link input {
+  flex: 1; min-width: 0; padding: 8px 10px; font: inherit; font-size: 14px;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+}
+.link button {
+  padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  color: var(--bg); background: var(--text); border: none; border-radius: 8px;
+}
+.link :disabled { opacity: 0.4; cursor: default; }
+.error { margin-top: 8px; font-size: 14px; color: #dc2626; }

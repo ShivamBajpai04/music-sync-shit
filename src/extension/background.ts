@@ -24,9 +24,13 @@ function connect() {
   };
   socket.onmessage = (event) => {
     const message = JSON.parse(String(event.data)) as AgentToExtension;
-    if (message.type !== 'command') return;
-    const command: BackgroundToTab = { type: 'command', command: message.command };
-    tabs.get(message.source)?.postMessage(command);
+    if (message.type === 'command') {
+      const command: BackgroundToTab = { type: 'command', command: message.command };
+      tabs.get(message.source)?.postMessage(command);
+    } else if (message.type === 'open') {
+      const tabId = tabs.get(message.source)?.sender?.tab?.id;
+      if (tabId !== undefined) void chrome.tabs.update(tabId, { url: message.url });
+    }
   };
   socket.onclose = () => {
     socket = null;
