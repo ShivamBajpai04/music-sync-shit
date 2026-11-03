@@ -13,7 +13,7 @@ import {
   type ExtensionToAgent,
   advance,
   SOURCE_ORDER,
-  START_MARKER,
+  startHash,
   type PlayerState,
   type Progress,
   type RemoteToAgent,
@@ -23,6 +23,7 @@ import {
   type Track,
 } from '../shared/protocol.ts';
 import { parseLink } from './links.ts';
+import { loadLastPlayback, saveLastPlayback, type LastPlayback } from './memory.ts';
 import type { Mac } from './mac.ts';
 
 export interface AgentOptions {
@@ -35,6 +36,10 @@ export interface AgentOptions {
   staticDir?: string;
   // Every Player on the tailnet, this one included (ADR-0003).
   players: PlayerEntry[];
+  // Where the last playback is saved for Resume; kept in memory only if omitted.
+  lastPlaybackPath?: string;
+  // How often the remembered position is saved while playing.
+  saveIntervalMs?: number;
   mac: Mac;
   pingIntervalMs?: number;
   // How often to re-read system volume, to catch changes made on the Mac.
@@ -52,7 +57,15 @@ interface SourceTab {
   track: Track | null;
   playing: boolean;
   progress: Progress | null;
+  link: string | null;
+  context: string | null;
   receivedAt: number;
+}
+
+// The last playback, with its position as of `at` (agent clock).
+interface Remembered extends LastPlayback {
+  playing: boolean;
+  at: number;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -65,6 +78,9 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   const sources = new Map<SourceId, SourceTab>();
   const remotes = new Set<WebSocket>();
   let volume = await readVolume(options.mac);
+  const saved = await loadLastPlayback(options.lastPlaybackPath);
+  let remembered: Remembered | null = saved && { ...saved, playing: false, at: Date.now() };
+  let pendingResume: { source: SourceId; link: string; positionMs: number; playRequested: boolean } | null = null;
 
   function playerState(): PlayerState {
     // A card per open Source tab with a track loaded, playing or paused. If
@@ -72,7 +88,52 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     const open = SOURCE_ORDER.filter((source) => sources.has(source));
     const loaded = open.filter((source) => sources.get(source)!.track);
     const shown = loaded.length > 0 ? loaded : open;
-    return { name: options.name, sources: shown.map(sourceState), volume };
+    const resumable = remembered && !sources.get(remembered.source)?.playing;
+    return {
+      name: options.name,
+      sources: shown.map(sourceState),
+      volume,
+      resume: resumable ? { source: remembered!.source, track: remembered!.track } : null,
+    };
+  }
+
+  function rememberedProgress(memory: Remembered) {
+    return memory.progress && advance(memory.progress, memory.playing, Date.now() - memory.at);
+  }
+
+  // The last playback follows whichever Source is playing, and the remembered
+  // Source's own changes, as long as the page gives a link to reopen it.
+  function remember(source: SourceId) {
+    const tab = sources.get(source)!;
+    if (!tab.track || !tab.link) return;
+    if (!tab.playing && remembered && (remembered.source !== source || remembered.link !== tab.link)) return;
+    const changed = remembered?.link !== tab.link || remembered?.context !== tab.context || remembered.playing !== tab.playing;
+    remembered = { source, track: tab.track, link: tab.link, context: tab.context, progress: tab.progress, playing: tab.playing, at: Date.now() };
+    if (changed || !tab.playing) void save();
+  }
+
+  // When the remembered Source's tab goes away, keep where it got to.
+  function forget(source: SourceId) {
+    sources.delete(source);
+    if (remembered?.source !== source) return;
+    remembered = { ...remembered, progress: rememberedProgress(remembered), playing: false, at: Date.now() };
+    void save();
+  }
+
+  // Saves run one at a time, each writing the memory as it is by then.
+  let saving = Promise.resolve();
+  let closed = false;
+  function save() {
+    saving = saving.then(async () => {
+      if (!remembered || closed) return;
+      const { playing, at, ...playback } = remembered;
+      try {
+        await saveLastPlayback(options.lastPlaybackPath, { ...playback, progress: rememberedProgress(remembered) });
+      } catch (error) {
+        console.error('Saving last playback failed:', error);
+      }
+    });
+    return saving;
   }
 
   function sourceState(source: SourceId): SourceState {
@@ -118,15 +179,32 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
             track: message.track,
             playing: message.playing,
             progress: message.progress,
+            link: message.link,
+            context: message.context,
             receivedAt: Date.now(),
           });
+          const wasResuming = pendingResume?.source === message.source;
+          if (wasResuming && message.link === pendingResume?.link) {
+            if (!message.playing) {
+              if (!pendingResume.playRequested) {
+                pendingResume.playRequested = true;
+                sendCommand(message.source, { type: 'play' });
+              }
+            } else if (message.progress || pendingResume.positionMs === 0) {
+              if (message.progress && Math.abs(message.progress.positionMs - pendingResume.positionMs) > 1_500) {
+                sendCommand(message.source, { type: 'seek', positionMs: pendingResume.positionMs });
+              }
+              pendingResume = null;
+            }
+          }
+          if (!wasResuming) remember(message.source);
         } else {
-          sources.delete(message.source);
+          forget(message.source);
         }
         broadcast();
       });
       ws.on('close', () => {
-        for (const [source, tab] of sources) if (tab.socket === ws) sources.delete(source);
+        for (const [source, tab] of sources) if (tab.socket === ws) forget(source);
         broadcast();
       });
     });
@@ -154,7 +232,8 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
         const message = JSON.parse(String(data)) as RemoteToAgent;
         if (message.type === 'command') sendCommand(message.source, message.command);
         else if (message.type === 'set-volume') void setVolume(message.volume);
-        else void startLink(message.link, ws);
+        else if (message.type === 'start-link') void startLink(message.link, ws);
+        else void resume(ws);
       });
       ws.on('close', () => remotes.delete(ws));
     });
@@ -167,25 +246,61 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       requester.send(JSON.stringify(message));
       return;
     }
-    // Only one Source plays at a time when starting something new; the other
-    // is paused, not closed, so it can be resumed.
-    for (const [source, tab] of sources) {
-      if (source !== parsed.source && tab.playing) sendCommand(source, { type: 'pause' });
-    }
-    const url = `${parsed.url}#${START_MARKER}`;
-    const tab = sources.get(parsed.source);
-    if (tab) {
-      const message: AgentToExtension = { type: 'open', source: parsed.source, url };
-      tab.socket.send(JSON.stringify(message));
+    await open(parsed.source, `${parsed.url}${startHash()}`, requester);
+  }
+
+  // Plays what's loaded in the remembered Source's tab, or reopens the
+  // remembered track where it got to.
+  async function resume(requester: WebSocket) {
+    if (!remembered) return;
+    const tab = sources.get(remembered.source);
+    if (tab?.track && tab.link === remembered.link) {
+      pauseOthers(remembered.source);
+      sendCommand(remembered.source, { type: 'play' });
       return;
     }
-    // No tab for this Source: Arc opens one, launching first if needed.
+    const positionMs = rememberedProgress(remembered)?.positionMs;
+    const url = new URL(remembered.link);
+    if (remembered.source === 'youtube-music' && remembered.context) {
+      const list = new URL(remembered.context).searchParams.get('list');
+      if (list) url.searchParams.set('list', list);
+    } else if (remembered.source === 'spotify' && remembered.context) {
+      const context = new URL(remembered.context);
+      const match = /^\/(playlist|album)\/([A-Za-z0-9]+)$/.exec(context.pathname);
+      if (context.hostname === 'open.spotify.com' && match) {
+        url.searchParams.set('context', `spotify:${match[1]}:${match[2]}`);
+      }
+    }
+    pendingResume = { source: remembered.source, link: remembered.link, positionMs: positionMs ?? 0, playRequested: false };
+    if (!await open(remembered.source, `${url}${startHash(positionMs)}`, requester)) pendingResume = null;
+  }
+
+  // Only one Source plays at a time when starting something; the other is
+  // paused, not closed, so it can be resumed.
+  function pauseOthers(source: SourceId) {
+    for (const [other, tab] of sources) {
+      if (other !== source && tab.playing) sendCommand(other, { type: 'pause' });
+    }
+  }
+
+  // Starts url (carrying a start marker) on source: in its open tab, or in a
+  // new Arc tab, launching Arc if needed.
+  async function open(source: SourceId, url: string, requester: WebSocket) {
+    pauseOthers(source);
+    const tab = sources.get(source);
+    if (tab) {
+      const message: AgentToExtension = { type: 'open', source, url };
+      tab.socket.send(JSON.stringify(message));
+      return true;
+    }
     try {
       await options.mac.openInArc(url);
+      return true;
     } catch (error) {
       console.error('Opening Arc failed:', error);
       const message: AgentToRemote = { type: 'error', message: 'Couldn’t open Arc on this Mac' };
       requester.send(JSON.stringify(message));
+      return false;
     }
   }
 
@@ -199,6 +314,11 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     volume = await readVolume(options.mac);
     broadcast();
   }
+
+  // Position is only reported when it jumps, so save it now and then.
+  const savePoll = setInterval(() => {
+    if (remembered?.playing) void save();
+  }, options.saveIntervalMs ?? 5_000);
 
   const volumePoll = setInterval(async () => {
     const current = await readVolume(options.mac);
@@ -221,8 +341,11 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     async close() {
       clearInterval(ping);
       clearInterval(volumePoll);
+      clearInterval(savePoll);
       for (const ws of [...extensionSockets.clients, ...remoteSockets.clients]) ws.terminate();
       await Promise.all([closeServer(extensionServer), closeServer(remoteServer)]);
+      await save();
+      closed = true;
     },
   };
 }

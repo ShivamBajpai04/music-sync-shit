@@ -57,6 +57,7 @@ const agent = await startAgent({
   extension: { port: DEFAULT_EXTENSION_PORT },
   staticDir: join(import.meta.dirname, '..', '..', 'dist', 'remote'),
   players,
+  lastPlaybackPath: join(homedir(), '.config', 'music-sync', 'last-playback.json'),
   mac: realMac,
 });
 console.log(`Remote: http://${host}:${agent.remotePort}  (extension on 127.0.0.1:${agent.extensionPort})`);

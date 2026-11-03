@@ -35,6 +35,9 @@ export interface PlayerState {
   sources: SourceState[];
   // The Mac's system volume, 0-100; null if it couldn't be read.
   volume: number | null;
+  // What Resume would play, or null when Resume isn't available: nothing is
+  // remembered, or the remembered Source is already playing.
+  resume: { source: SourceId; track: Track } | null;
 }
 
 // Display order when several Sources are shown.
@@ -52,7 +55,8 @@ export type RemoteToAgent =
   | { type: 'command'; source: SourceId; command: SourceCommand }
   | { type: 'set-volume'; volume: number }
   // A pasted Spotify or YouTube Music link to start playing on this Player.
-  | { type: 'start-link'; link: string };
+  | { type: 'start-link'; link: string }
+  | { type: 'resume' };
 export type AgentToRemote =
   | { type: 'state'; state: PlayerState }
   // Sent only to the Remote whose request failed.
@@ -60,7 +64,17 @@ export type AgentToRemote =
 
 // Extension <-> agent, on localhost.
 export type ExtensionToAgent =
-  | { type: 'source-state'; source: SourceId; track: Track | null; playing: boolean; progress: Progress | null }
+  | {
+      type: 'source-state';
+      source: SourceId;
+      track: Track | null;
+      playing: boolean;
+      progress: Progress | null;
+      // A link that reopens the current track, when the page shows one.
+      link: string | null;
+      // Playback Context, when the page exposes one.
+      context: string | null;
+    }
   | { type: 'source-closed'; source: SourceId };
 export type AgentToExtension =
   | { type: 'command'; source: SourceId; command: SourceCommand }
@@ -70,8 +84,18 @@ export type AgentToExtension =
   | { type: 'ping' };
 
 // Added as the URL hash of a link being started. A Source driver that loads
-// with it presses play, then removes it.
+// with it presses play, seeks to the position if one is given, then removes it.
 export const START_MARKER = 'music-sync-play';
+
+export function startHash(positionMs?: number) {
+  return positionMs ? `#${START_MARKER}=${Math.round(positionMs)}` : `#${START_MARKER}`;
+}
+
+// The position to start at (0 for the beginning), or null if hash isn't a start marker.
+export function parseStartHash(hash: string): number | null {
+  const match = new RegExp(`^#${START_MARKER}(?:=(\\d+))?$`).exec(hash);
+  return match ? Number(match[1] ?? 0) : null;
+}
 
 // Where a progress estimate is after elapsedMs more time.
 export function advance(progress: Progress, playing: boolean, elapsedMs: number): Progress {
