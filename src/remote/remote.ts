@@ -44,8 +44,11 @@ function createPlayerGroup() {
   });
   const error = el('div', '', 'error');
 
+  const resume = button('', 'Resume', () => player?.send({ type: 'resume' }));
+  resume.className = 'resume';
+
   const cardList = el('div', '', 'cards');
-  element.append(header, volumeRow, linkForm, error, cardList);
+  element.append(header, volumeRow, linkForm, error, resume, cardList);
   const cards = new Map<SourceId | 'none', ReturnType<typeof createCard>>();
 
   function update(next: PlayerConnection) {
@@ -57,6 +60,9 @@ function createPlayerGroup() {
     element.classList.toggle('offline', !online);
 
     link.disabled = start.disabled = !online;
+    const resumable = online ? state!.resume : null;
+    resume.disabled = !resumable;
+    resume.textContent = resumable ? `⟲ Resume “${resumable.track.title}” on ${SOURCE_LABELS[resumable.source]}` : '⟲ Resume';
     error.textContent = player.error ?? '';
     error.hidden = !player.error;
 

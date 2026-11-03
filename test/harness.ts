@@ -43,13 +43,19 @@ export class FakeMac implements Mac {
 export async function startTestAgent(
   name = 'Office Mac',
   mac = new FakeMac(),
-  { players = [], port = 0 }: { players?: PlayerEntry[]; port?: number } = {},
+  {
+    players = [],
+    port = 0,
+    lastPlaybackPath,
+  }: { players?: PlayerEntry[]; port?: number; lastPlaybackPath?: string } = {},
 ) {
   const agent = await startAgent({
     name,
     remote: { host: '127.0.0.1', port },
     extension: { port: 0 },
     players,
+    lastPlaybackPath,
+    saveIntervalMs: 20,
     mac,
     volumePollMs: 20,
   });
@@ -72,6 +78,7 @@ export class FakeSource {
   track: Track | null;
   playing: boolean;
   progress: Progress | null;
+  context: string | null = null;
   received: SourceCommand[] = [];
   navigatedTo: string[] = [];
 
@@ -134,9 +141,10 @@ export class FakeSource {
   }
 
   // A change made on the Mac itself, not from the Remote.
-  setLocally(change: { track?: Track | null; playing?: boolean; positionMs?: number }) {
+  setLocally(change: { track?: Track | null; playing?: boolean; positionMs?: number; context?: string | null }) {
     if (change.track !== undefined) this.track = change.track;
     if (change.playing !== undefined) this.playing = change.playing;
+    if (change.context !== undefined) this.context = change.context;
     if (change.positionMs !== undefined && this.progress) {
       this.progress = { ...this.progress, positionMs: change.positionMs };
     }
@@ -158,6 +166,8 @@ export class FakeSource {
       track: this.track,
       playing: this.playing,
       progress: this.progress,
+      link: this.track ? trackLink(this.source, this.track) : null,
+      context: this.context,
     });
   }
 
@@ -195,6 +205,10 @@ export class FakeRemote {
   send(command: SourceCommand, source?: SourceId) {
     const target = source ?? this.latest?.sources[0]?.source ?? 'spotify';
     this.sendMessage({ type: 'command', source: target, command });
+  }
+
+  resume() {
+    this.sendMessage({ type: 'resume' });
   }
 
   startLink(link: string) {
@@ -239,6 +253,12 @@ export class FakeRemote {
   close() {
     this.socket.close();
   }
+}
+
+// The link a fake Source reports for a track, as the real pages would.
+export function trackLink(source: SourceId, track: Track) {
+  const id = track.title.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return source === 'spotify' ? `https://open.spotify.com/track/${id}` : `https://music.youtube.com/watch?v=${id}`;
 }
 
 // The first card's Source, which is the only one unless several are playing.

@@ -25,6 +25,7 @@ describe('a single Player', () => {
       name: 'Office Mac',
       sources: [],
       volume: 50,
+      resume: null,
     });
   });
 

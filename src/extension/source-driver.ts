@@ -1,11 +1,12 @@
 // Runs one Source driver inside its tab: reports state changes to the
 // background service worker and carries out commands it sends back.
-import { START_MARKER, advance, type Progress, type SourceCommand, type SourceId, type Track } from '../shared/protocol.ts';
+import { advance, parseStartHash, type Progress, type SourceCommand, type SourceId, type Track } from '../shared/protocol.ts';
 import type { BackgroundToTab, TabToBackground } from './messages.ts';
 
 export interface SourceDriver {
   source: SourceId;
-  read(): { track: Track | null; playing: boolean; progress: Progress | null };
+  // link reopens the current track, when the page shows one.
+  read(): { track: Track | null; playing: boolean; progress: Progress | null; link: string | null; context: string | null };
   run(command: SourceCommand): void;
   // Called repeatedly after the page loads from a started link, until it
   // returns 'started': press whatever starts the linked item playing.
@@ -16,6 +17,9 @@ const POLL_MS = 1_000;
 const RECONNECT_MS = 1_000;
 const START_RETRY_MS = 1_000;
 const START_GIVE_UP_MS = 20_000;
+// A started track counts as playing from the start once it's this far in or
+// less, so a seek doesn't land on whatever was playing before.
+const FRESH_START_MS = 10_000;
 // Position is only reported when it strays this far from where the receiver
 // would estimate it to be, i.e. after a seek or a stall.
 const DRIFT_MS = 1_500;
@@ -80,7 +84,8 @@ export function runSourceDriver(driver: SourceDriver) {
 
   // A link to the page already open only changes the hash, without a reload.
   const checkForStart = () => {
-    if (location.hash === `#${START_MARKER}`) startLinked(driver);
+    const positionMs = parseStartHash(location.hash);
+    if (positionMs !== null) startLinked(driver, positionMs);
   };
   window.addEventListener('hashchange', checkForStart);
   checkForStart();
@@ -88,13 +93,23 @@ export function runSourceDriver(driver: SourceDriver) {
   connect();
 }
 
-function startLinked(driver: SourceDriver) {
+function startLinked(driver: SourceDriver, positionMs: number) {
   // Remove the marker so a reload doesn't start it again.
   history.replaceState(history.state, '', location.pathname + location.search);
   const startedAt = Date.now();
-  const attempt = () => {
-    if (driver.startLinked() === 'started' || Date.now() - startedAt > START_GIVE_UP_MS) return;
-    setTimeout(attempt, START_RETRY_MS);
+  const retry = (step: () => boolean) => {
+    if (step() || Date.now() - startedAt > START_GIVE_UP_MS) return;
+    setTimeout(() => retry(step), START_RETRY_MS);
   };
-  attempt();
+  const seek = () => {
+    const { playing, progress } = driver.read();
+    if (!playing || !progress || progress.positionMs > FRESH_START_MS) return false;
+    driver.run({ type: 'seek', positionMs });
+    return true;
+  };
+  retry(() => {
+    if (driver.startLinked() !== 'started') return false;
+    if (positionMs > 0) retry(seek);
+    return true;
+  });
 }

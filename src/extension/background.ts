@@ -16,6 +16,76 @@ const lastState = new Map<SourceId, ExtensionToAgent>();
 let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Spotify's current now-playing links lead to the album. Its own Copy link to
+// Song action has the track URL, so capture that action in the page's world
+// without letting it replace the user's clipboard.
+async function captureSpotifySongLink(expectedTitle: string): Promise<{ link: string; context: string | null } | null> {
+  const clipboard = navigator.clipboard;
+  if (!clipboard?.write) return null;
+  // Media Session metadata can change before Spotify redraws its song menu.
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const label = document.querySelector('[data-testid="now-playing-widget-v2"], [data-testid="now-playing-widget"]')?.getAttribute('aria-label');
+    if (label?.startsWith(`Now playing: ${expectedTitle} by `)) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const label = document.querySelector('[data-testid="now-playing-widget-v2"], [data-testid="now-playing-widget"]')?.getAttribute('aria-label');
+  if (!label?.startsWith(`Now playing: ${expectedTitle} by `)) return null;
+  const originalWrite = clipboard.write;
+  const cover = document.querySelector<HTMLButtonElement>('button[data-testid="cover-art-button"]');
+  let copy = document.querySelector<HTMLButtonElement>('button[aria-label="Copy link to Song"]');
+  const openedView = !copy;
+  if (!copy) {
+    cover?.click();
+    for (let attempt = 0; attempt < 20 && !copy; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      copy = document.querySelector<HTMLButtonElement>('button[aria-label="Copy link to Song"]');
+    }
+  }
+  if (!copy) return null;
+
+  // The details panel can lag the now-playing bar by a render.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const contextHref = document.querySelector<HTMLAnchorElement>('aside[aria-label="Now playing view"] a[href^="/playlist/"], aside[aria-label="Now playing view"] a[href^="/album/"]')?.href;
+  const contextMatch = contextHref && /\/(playlist|album)\/([A-Za-z0-9]+)/.exec(contextHref);
+  const context = contextMatch ? `https://open.spotify.com/${contextMatch[1]}/${contextMatch[2]}` : null;
+
+  let finish!: (link: string | null) => void;
+  const captured = new Promise<string | null>((resolve) => { finish = resolve; });
+  clipboard.write = async function (items: ClipboardItems) {
+    for (const item of items) {
+      if (!item.types.includes('text/plain')) continue;
+      const text = await (await item.getType('text/plain')).text();
+      if (/^https:\/\/open\.spotify\.com\/track\/[A-Za-z0-9]+/.test(text)) {
+        finish(text);
+        return;
+      }
+    }
+    return originalWrite.call(clipboard, items);
+  };
+  try {
+    copy.click();
+    const link = await Promise.race([
+      captured,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_500)),
+    ]);
+    return link ? { link, context } : null;
+  } finally {
+    clipboard.write = originalWrite;
+    if (openedView) cover?.click();
+  }
+}
+
+chrome.runtime.onMessage.addListener((message: { type?: string; title?: string }, sender, respond) => {
+  if (message.type !== 'spotify-song-link' || !message.title || sender.tab?.id === undefined) return;
+  void chrome.scripting.executeScript({
+    target: { tabId: sender.tab.id },
+    world: 'MAIN',
+    func: captureSpotifySongLink,
+    args: [message.title],
+  }).then((results) => respond(results[0]?.result ?? null), () => respond(null));
+  return true;
+});
+
 function connect() {
   if (socket && socket.readyState <= WebSocket.OPEN) return;
   socket = new WebSocket(AGENT_URL);
@@ -57,6 +127,8 @@ chrome.runtime.onConnect.addListener((port) => {
       track: message.track,
       playing: message.playing,
       progress: message.progress,
+      link: message.link,
+      context: message.context,
     };
     lastState.set(source, state);
     send(state);
