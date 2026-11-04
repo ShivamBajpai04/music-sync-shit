@@ -190,6 +190,12 @@ function createCard(send: (message: RemoteToAgent) => void) {
     playPause.replaceChildren(icon(playing ? 'pause' : 'play'));
     playPause.setAttribute('aria-label', playing ? 'Pause' : 'Play');
     handoffs.hidden = !playing || !track || !peers.length;
+    for (const [label, move] of moveButtons) {
+      if (!peers.some(peer => peer.label === label)) {
+        move.remove();
+        moveButtons.delete(label);
+      }
+    }
     for (const peer of peers) {
       let move = moveButtons.get(peer.label);
       if (!move) {
@@ -275,6 +281,7 @@ function clock(ms: number) {
 
 const groups: ReturnType<typeof createPlayerGroup>[] = [];
 watchPlayers(location.origin, (players) => {
+  while (groups.length > players.length) groups.pop()!.element.remove();
   players.forEach((player, index) => {
     if (!groups[index]) {
       groups[index] = createPlayerGroup();
