@@ -1,0 +1,3 @@
+# Discover Players automatically while keeping agents independent
+
+Manual peer lists caused a working Player to be invisible from the Remote when setup omitted a config step. Each agent now reads Tailscale's local device list and verifies candidates through Music Sync's read-only WebSocket state handshake; the Remote periodically refreshes the resulting directory while retaining its existing connections. Agents persist discovered tailnet endpoints so offline Players remain visible after restart, retain optional manual seeds, and support disabling discovery; this supersedes only the static-list portion of ADR-0003 and preserves ADR-0002's tailnet trust model.

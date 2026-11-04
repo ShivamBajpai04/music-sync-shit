@@ -22,20 +22,19 @@ before login, and a sleeping Mac remains unavailable.
   npm run build
   ```
 
-- [ ] Create `~/.config/music-sync/config.json`. For two Players, put both
-  Macs' Tailscale DNS names in the same list on each Mac:
+- [ ] Player discovery is automatic. Each Mac must run the agent and be on
+  the same tailnet. There is no need to copy a Player list between Macs.
+  Config at `~/.config/music-sync/config.json` is optional; `{}` works.
+  To set a friendly name for this Player, for example:
 
   ```json
-  { "players": ["office-mac", "bedroom-mac"] }
+  { "name": "Bedroom Mac" }
   ```
 
-  Replace those example names with the names in your Tailscale device list.
-  Create the directory with `mkdir -p ~/.config/music-sync` first. If you skip
-  this step, installation creates `{}` and the Remote shows only this Mac.
-  Optional fields are `name` (this Player's display name), `port` (default
-  4848), and `host` (this Mac's tailnet IPv4 address). Normally omit `host`;
-  the agent reads it from Tailscale. A Player entry can be `hostname:port`.
-  Keep the listen address on the tailnet.
+  Installation creates the config directory and an empty config if needed.
+  Other optional fields are `port` (default 4848) and `host` (this Mac's
+  tailnet IPv4 address). Normally omit `host`; the agent reads it from
+  Tailscale. Keep the listen address on the tailnet.
 - [ ] Stop any manually running `npm run agent` with Ctrl+C.
 - [ ] Run `npm run service:install`, then `npm run service:status`. Look for
   `state = running` and a PID. The installer uses launchd to start the agent
@@ -71,7 +70,8 @@ version installed, or rerun installation after changing Node versions.
   it on a phone or Mac on the same tailnet. The default is
   `http://<this-mac-tailnet-ip>:4848/`.
 - [ ] Check track information, play/pause, seek, system volume, and starting a
-  pasted link. When both Macs are set up, confirm that both Player cards appear.
+  pasted link. When both Macs are set up, both Player cards should appear
+  automatically within about 20 seconds, even if the Remote was already open.
 - [ ] Run `npm run service:restart`. The Remote should reconnect and the Source
   cards should return without reloading the extension.
 - [ ] To check crash recovery, note the PID in `npm run service:status`, run
@@ -101,6 +101,23 @@ doesn't close the Source tabs.
 
 ## Manage and troubleshoot
 
+Discovery checks Tailscale peers every 15 seconds, verifies Music Sync on port
+4848 (and this Mac's configured port), and caches known Players in
+`~/.config/music-sync/discovered-players.json`. It doesn't add phones or other
+tailnet devices unless they actually respond as Music Sync agents. Known
+offline Players stay visible as unavailable. The Remote refreshes the directory
+every 5 seconds without dropping existing Player connections; refresh the page
+once after upgrading from a version that used static lists.
+
+Existing `players` entries remain optional seeds. For a peer using another
+custom port, add `"players": ["peer-name:5000"]`. For a fully manual list, set
+`"discoverPlayers": false` and configure `players` yourself. Automatic discovery
+otherwise works even if the two Macs have different or empty seed lists. Check
+the error log if Tailscale's CLI isn't available; known Players remain usable
+while discovery retries. To forget old automatically discovered Players, stop
+the service, remove its discovered-players cache, and reinstall; reachable
+Players will be discovered again.
+
 ```sh
 npm run service:status
 npm run service:restart
@@ -120,3 +137,5 @@ reinstall. An offline Player or a Mac waiting for login can't be recovered from
 the Remote.
 
 The launchd behavior follows Apple's [Creating Launch Daemons and Agents](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html): a user LaunchAgent with RunAtLoad and KeepAlive, managed with launchctl.
+
+Candidate discovery uses the documented machine-readable [`tailscale status --json`](https://tailscale.com/docs/reference/tailscale-cli) output.

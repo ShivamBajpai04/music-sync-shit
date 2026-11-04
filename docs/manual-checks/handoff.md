@@ -1,8 +1,8 @@
 # Manual check: Handoff
 
 Requires two real Macs. Install the updated agent and extension on both using
-[the setup checklist](../setup.md). Both configs must list the same two Player
-labels and tailnet addresses. Open the Remote from either Mac and confirm both
+[the setup checklist](../setup.md). Leave discovery enabled on both Macs, or
+configure both Player lists manually if discovery is disabled. Open the Remote from either Mac and confirm both
 Players are online.
 
 - [ ] Play a Spotify track from a playlist on the first Player and seek to the

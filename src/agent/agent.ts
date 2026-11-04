@@ -37,7 +37,7 @@ export interface AgentOptions {
   extension: { port: number };
   // Directory holding the built Remote page; omitted in tests.
   staticDir?: string;
-  // Every Player on the tailnet, this one included (ADR-0003).
+  // Live Player directory; discovery updates this array in place (ADR-0004).
   players: PlayerEntry[];
   // Where the last playback is saved for Resume; kept in memory only if omitted.
   lastPlaybackPath?: string;
@@ -224,7 +224,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   // Remote side: the page and its live connection. No auth (ADR-0002).
   const remoteServer = createServer((req, res) => {
     if (req.url === PLAYERS_PATH) {
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(options.players));
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(options.players));
       return;
     }
     void serveStatic(options.staticDir, req, res);
