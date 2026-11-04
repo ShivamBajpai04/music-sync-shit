@@ -42,3 +42,6 @@ _Avoid_: Sync, multi-room
 
 **Tailnet**:
 The set of my devices connected via Tailscale; the only network the tool is reachable on.
+
+**Voice Channel**:
+A live push-to-talk stream from a Remote's microphone to one selected Player's current Mac audio output. Holding transmits; releasing stops. Independent of music playback and Handoff.

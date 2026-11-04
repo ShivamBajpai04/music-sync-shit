@@ -139,3 +139,29 @@ the Remote.
 The launchd behavior follows Apple's [Creating Launch Daemons and Agents](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html): a user LaunchAgent with RunAtLoad and KeepAlive, managed with launchctl.
 
 Candidate discovery uses the documented machine-readable [`tailscale status --json`](https://tailscale.com/docs/reference/tailscale-cli) output.
+
+## Android push-to-talk
+
+Build and reinstall the agent on each receiving Mac (`npm run build` then
+`npm run service:install`). The native voice helper needs Apple's command-line
+tools; if `xcrun swiftc` is missing, install them with `xcode-select --install`.
+Build on each Mac so the helper matches its processor. No extension reload is
+needed for voice, and no music tab needs to be open.
+
+On the Mac whose Remote link you use on Android, run `npm run voice:setup`.
+It adds a private Tailscale HTTPS route on port 8443 and prints the new link.
+If Tailscale asks you to enable HTTPS, follow its approval link and rerun the
+command. Existing routes on port 443 are preserved; a conflicting 8443 route
+causes setup to stop. This uses Serve, never Funnel.
+
+Open that HTTPS link in Android Chrome with Tailscale connected. Hold the talk
+button under the intended Mac and allow microphone access. After granting it,
+release and hold again if necessary. The button lights up when transmission
+actually starts. Releasing, cancelling the touch, switching apps, or losing
+the connection stops capture. Each hold has a 60-second limit. There are no
+recordings; your voice uses the destination Mac's current output and volume.
+If another Remote is already talking to that Mac, wait until it releases.
+
+HTTPS Remote controls and voice both pass through the Mac serving the page;
+keep that Mac awake. You can run setup on both Macs for alternate HTTPS links.
+The original HTTP links still control music but cannot use Android's microphone.

@@ -2,7 +2,7 @@
 // Optional config: ~/.config/music-sync/config.json, with name/host overrides,
 // port (default 4848), players (manual seeds), or discoverPlayers: false.
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ import { DEFAULT_EXTENSION_PORT, DEFAULT_REMOTE_PORT, REMOTE_PATH, type PlayerEn
 import { startAgent } from './agent.ts';
 import { realMac } from './mac.ts';
 import { readTailnetNodes, startPlayerDiscovery } from './discovery.ts';
+import { openVoiceOutput } from './voice-output.ts';
 
 interface Config {
   players?: string[];
@@ -17,6 +18,7 @@ interface Config {
   name?: string;
   host?: string;
   discoverPlayers?: boolean;
+  secureRemoteUrl?: string;
 }
 
 const CONFIG_PATH = join(homedir(), '.config', 'music-sync', 'config.json');
@@ -51,6 +53,8 @@ async function main() {
   const players = config.players?.length
     ? config.players.map((spec) => playerEntry(spec, port))
     : [self];
+  const voiceBinary = process.env.MUSIC_SYNC_VOICE_BIN ?? join(import.meta.dirname, '..', '..', 'dist', 'agent', 'voice-player');
+  const voiceAvailable = process.platform === 'darwin' && await access(voiceBinary).then(() => true, () => false);
 
   const agent = await startAgent({
     name,
@@ -60,6 +64,9 @@ async function main() {
     players,
     lastPlaybackPath: join(homedir(), '.config', 'music-sync', 'last-playback.json'),
     mac: realMac,
+    voiceOutput: voiceAvailable ? () => openVoiceOutput(voiceBinary) : undefined,
+    loopbackRemote: true,
+    secureRemoteUrl: config.secureRemoteUrl,
   });
   const discovery = config.discoverPlayers === false ? null : startPlayerDiscovery({
     players, self,

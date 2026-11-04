@@ -6,6 +6,11 @@ Tailscale tailnet. Each Player runs a local agent and an unpacked Arc extension.
 Follow the [Mac setup checklist](docs/setup.md) to install the login agent,
 configure Players, and prepare Arc. It also covers updates and troubleshooting.
 
+For Android push-to-talk, update the agent on both Macs, then run
+`npm run voice:setup` on the Mac serving your Remote. Open the private HTTPS
+link it prints, allow microphone access, and hold **Hold to talk** under the
+Mac you want to address. Voice plays through that Mac's current audio output.
+
 For development, use Node.js 24 or later:
 
 ```sh

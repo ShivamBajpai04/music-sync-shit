@@ -1,6 +1,9 @@
 // Builds the standalone agent, extension and Remote page.
 import { cp, rm } from 'node:fs/promises';
 import { build } from 'esbuild';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 await rm('dist', { recursive: true, force: true });
 
@@ -15,6 +18,12 @@ await build({
   target: 'node24',
   define: { 'import.meta.dirname': '__dirname' },
 });
+if (process.platform === 'darwin') {
+  execFileSync('/usr/bin/xcrun', ['swiftc', '-swift-version', '5', '-O',
+    '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macosx12.0`,
+    '-module-cache-path', join(tmpdir(), 'music-sync-swift-cache'),
+    'src/agent/voice-player.swift', '-o', 'dist/agent/voice-player'], { stdio: 'inherit' });
+}
 
 await build({
   entryPoints: {
@@ -37,5 +46,6 @@ await build({
   target: 'safari16',
 });
 await cp('src/remote/index.html', 'dist/remote/index.html');
+await cp('src/remote/voice-capture.js', 'dist/remote/voice-capture.js');
 await cp('src/remote/style.css', 'dist/remote/style.css');
 await cp('src/remote/assets', 'dist/remote/assets', { recursive: true });

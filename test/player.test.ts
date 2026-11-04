@@ -23,6 +23,7 @@ describe('a single Player', () => {
     const state = await remote.waitFor(() => true);
     assert.deepEqual(state, {
       name: 'Office Mac',
+      voiceAvailable: false,
       sources: [],
       volume: 50,
       resume: null,

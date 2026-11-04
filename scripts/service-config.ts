@@ -30,6 +30,7 @@ export function launchAgentPlist(home: string, node: string, tailscale: string) 
     <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>MUSIC_SYNC_TAILSCALE_BIN</key><string>${xml(tailscale)}</string>
     <key>MUSIC_SYNC_REMOTE_DIR</key><string>${xml(join(paths.install, 'remote'))}</string>
+    <key>MUSIC_SYNC_VOICE_BIN</key><string>${xml(join(paths.install, 'agent', 'voice-player'))}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -41,7 +42,7 @@ export function launchAgentPlist(home: string, node: string, tailscale: string) 
 }
 
 export async function checkBuild(dist: string) {
-  for (const file of ['agent/main.cjs', 'remote/index.html', 'remote/remote.js', 'remote/style.css', 'remote/assets/sky-flowers.webp', 'extension/manifest.json']) {
+  for (const file of ['agent/main.cjs', ...(process.platform === 'darwin' ? ['agent/voice-player'] : []), 'remote/voice-capture.js', 'remote/index.html', 'remote/remote.js', 'remote/style.css', 'remote/assets/sky-flowers.webp', 'extension/manifest.json']) {
     await access(join(dist, file));
   }
 }

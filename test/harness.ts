@@ -3,6 +3,7 @@
 import { WebSocket } from 'ws';
 import { startAgent, type RunningAgent } from '../src/agent/agent.ts';
 import type { Mac } from '../src/agent/mac.ts';
+import type { VoiceOutput } from '../src/agent/voice-output.ts';
 import {
   EXTENSION_PATH,
   REMOTE_PATH,
@@ -49,7 +50,8 @@ export async function startTestAgent(
     port = 0,
     lastPlaybackPath,
     handoffTimeoutMs,
-  }: { players?: PlayerEntry[]; port?: number; lastPlaybackPath?: string; handoffTimeoutMs?: number } = {},
+    voiceOutput,
+  }: { players?: PlayerEntry[]; port?: number; lastPlaybackPath?: string; handoffTimeoutMs?: number; voiceOutput?: () => Promise<VoiceOutput> } = {},
 ) {
   const agent = await startAgent({
     name,
@@ -61,6 +63,7 @@ export async function startTestAgent(
     mac,
     volumePollMs: 20,
     handoffTimeoutMs,
+    voiceOutput,
   });
   return { agent, mac };
 }

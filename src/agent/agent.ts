@@ -28,6 +28,8 @@ import { loadLastPlayback, saveLastPlayback, type LastPlayback } from './memory.
 import type { Mac } from './mac.ts';
 import { playbackUrl } from './playback.ts';
 import { HandoffError, playbackStatus, startOnPeer } from './handoff.ts';
+import { startVoiceRouter } from './voice.ts';
+import type { VoiceOutput } from './voice-output.ts';
 
 export interface AgentOptions {
   name: string;
@@ -48,6 +50,10 @@ export interface AgentOptions {
   // How often to re-read system volume, to catch changes made on the Mac.
   volumePollMs?: number;
   handoffTimeoutMs?: number;
+  voiceOutput?: () => Promise<VoiceOutput>;
+  // A separate loopback listener lets Tailscale Serve terminate private HTTPS.
+  loopbackRemote?: boolean;
+  secureRemoteUrl?: string;
 }
 
 export interface RunningAgent {
@@ -99,6 +105,8 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     const resumable = remembered && !sources.get(remembered.source)?.playing;
     return {
       name: options.name,
+      voiceAvailable: !!options.voiceOutput,
+      ...(options.secureRemoteUrl ? { secureRemoteUrl: options.secureRemoteUrl } : {}),
       ...(outgoingHandoff ? { handoff: outgoingHandoff } : {}),
       sources: shown.map(sourceState),
       volume,
@@ -222,15 +230,23 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   });
 
   // Remote side: the page and its live connection. No auth (ADR-0002).
-  const remoteServer = createServer((req, res) => {
+  const handleRemoteRequest = (req: IncomingMessage, res: ServerResponse) => {
     if (req.url === PLAYERS_PATH) {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(options.players));
       return;
     }
     void serveStatic(options.staticDir, req, res);
-  });
+  };
+  const remoteServer = createServer(handleRemoteRequest);
+  const localRemoteServer = options.loopbackRemote && options.remote.host !== '127.0.0.1' ? createServer(handleRemoteRequest) : null;
   const remoteSockets = new WebSocketServer({ noServer: true });
-  remoteServer.on('upgrade', (req, socket, head) => {
+  const voiceRouter = startVoiceRouter({
+    players: options.players,
+    ownUrl: () => `ws://${options.remote.host}:${(remoteServer.address() as AddressInfo).port}${REMOTE_PATH}`,
+    output: options.voiceOutput,
+  });
+  const attachUpgrade = (server: Server) => server.on('upgrade', (req, socket, head) => {
+    if (voiceRouter.upgrade(req, socket, head)) return;
     if (req.url !== REMOTE_PATH) {
       socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
       return;
@@ -261,6 +277,8 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.on('close', () => remotes.delete(ws));
     });
   });
+  attachUpgrade(remoteServer);
+  if (localRemoteServer) attachUpgrade(localRemoteServer);
 
   async function startLink(link: string, requester: WebSocket) {
     if (incomingHandoff || outgoingHandoff) return reportError(requester, 'A Handoff is already in progress on this Player.');
@@ -443,17 +461,19 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
 
   await listen(extensionServer, options.extension.port, '127.0.0.1');
   await listen(remoteServer, options.remote.port, options.remote.host);
+  if (localRemoteServer) await listen(localRemoteServer, (remoteServer.address() as AddressInfo).port, '127.0.0.1');
 
   return {
     remotePort: (remoteServer.address() as AddressInfo).port,
     extensionPort: (extensionServer.address() as AddressInfo).port,
     async close() {
       stopping.abort();
+      voiceRouter.close();
       clearInterval(ping);
       clearInterval(volumePoll);
       clearInterval(savePoll);
       for (const ws of [...extensionSockets.clients, ...remoteSockets.clients]) ws.terminate();
-      await Promise.all([closeServer(extensionServer), closeServer(remoteServer)]);
+      await Promise.all([closeServer(extensionServer), closeServer(remoteServer), ...(localRemoteServer ? [closeServer(localRemoteServer)] : [])]);
       await save();
       closed = true;
     },
