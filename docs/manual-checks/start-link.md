@@ -14,7 +14,7 @@ Same as [the Spotify Web checklist](./spotify-web.md#setup). Reload the extensio
 - [ ] **Spotify album and playlist**: the same for an album link and a playlist link. Playback starts from the first track.
 - [ ] **YouTube Music song**: with a YouTube Music tab open, paste a song link. The tab goes to it and plays.
 - [ ] **YouTube Music playlist and album**: the same for a playlist and an album link.
-- [ ] **No "Leave site?" dialog**: paste a link while a song is playing in each Source. The tab navigates without asking. (Known to fail on YouTube Music; see the follow-up issue.)
+- [ ] **No "Leave site?" dialog**: paste a link while a song is playing in each Source. The tab navigates without asking. YouTube Music uses its in-page router; check song, album and playlist links, including an album redirecting to a playlist.
 - [ ] **Same page again**: paste a link to what's already open in the tab. It starts playing without a reload.
 
 ### Opening a tab or Arc
@@ -31,3 +31,16 @@ Same as [the Spotify Web checklist](./spotify-web.md#setup). Reload the extensio
 - [ ] **Other Source playing**: with Spotify playing, paste a YouTube Music link. Spotify pauses and keeps its card, and YouTube Music plays.
 - [ ] **Unsupported link**: paste `https://example.com`. The Mac's group shows "Not a Spotify or YouTube Music link", and nothing opens. The error goes away on the next action.
 - [ ] **Other Remotes**: an error shows only on the Remote that pasted the link, not on another open Remote.
+
+## Issue #15 verification
+
+In Arc on 2026-11-04, starting R U Mine? from the Remote while Do I Wanna
+Know? was playing reproduced the Leave site dialog before the fix. After
+reloading the built extension, the same request changed the track and began
+playback without a dialog. Starting the AM album and its playlist also began
+the first track without unloading the page. Spotify's current track link was
+tested during playback as a regression check.
+
+YouTube Music navigation depends on its internal page router and may need an
+update if the site changes its endpoint format. Explicit Reload tab remains a
+browser reload and is separate from starting a link.

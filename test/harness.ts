@@ -81,6 +81,7 @@ export class FakeSource {
   context: string | null = null;
   received: SourceCommand[] = [];
   navigatedTo: string[] = [];
+  reloads = 0;
 
   constructor(agent: RunningAgent, source: SourceId, tracks: Track | Track[] | null, playing = false) {
     this.agent = agent;
@@ -99,6 +100,10 @@ export class FakeSource {
     });
     this.socket.on('message', (data) => {
       const message = JSON.parse(String(data)) as AgentToExtension;
+      if (message.type === 'reload-tabs') {
+        if (!message.source || message.source === this.source) this.reloads++;
+        return;
+      }
       if (message.type === 'ping' || message.source !== this.source) return;
       if (message.type === 'open') {
         // Like the real driver after loading a started link.
@@ -209,6 +214,10 @@ export class FakeRemote {
 
   resume() {
     this.sendMessage({ type: 'resume' });
+  }
+
+  reloadTabs(source?: SourceId) {
+    this.sendMessage({ type: 'reload-tabs', source });
   }
 
   startLink(link: string) {

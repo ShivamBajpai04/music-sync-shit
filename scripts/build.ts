@@ -26,3 +26,4 @@ await build({
 });
 await cp('src/remote/index.html', 'dist/remote/index.html');
 await cp('src/remote/style.css', 'dist/remote/style.css');
+await cp('src/remote/assets', 'dist/remote/assets', { recursive: true });
