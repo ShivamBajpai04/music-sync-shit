@@ -31,7 +31,7 @@ it('installs a standalone Player and updates it without changing config or playb
   t.after(() => rm(root, { recursive: true, force: true }));
   const home = join(root, 'home');
   const dist = join(root, 'dist');
-  const files = ['agent/main.cjs', 'remote/index.html', 'remote/remote.js', 'remote/style.css', 'remote/assets/sky-flowers.webp', 'extension/manifest.json'];
+  const files = ['agent/main.cjs', 'agent/voice-player', 'remote/voice-capture.js', 'remote/index.html', 'remote/remote.js', 'remote/style.css', 'remote/assets/sky-flowers.webp', 'extension/manifest.json'];
   for (const file of files) {
     await mkdir(dirname(join(dist, file)), { recursive: true });
     await writeFile(join(dist, file), file);

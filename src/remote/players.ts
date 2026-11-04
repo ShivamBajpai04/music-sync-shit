@@ -2,9 +2,11 @@
 // the page, refreshed as discovery finds peers (ADR-0004). Existing sockets
 // stay independent so an offline Player only affects itself.
 import { PLAYERS_PATH, type AgentToRemote, type PlayerEntry, type PlayerState, type RemoteToAgent } from '../shared/protocol.ts';
+import { playerSocketUrl } from '../shared/voice.ts';
 
 export interface PlayerConnection {
   label: string;
+  url: string;
   online: boolean;
   // The last state received; kept while offline, but stale.
   state: PlayerState | null;
@@ -98,6 +100,7 @@ export function watchPlayers(
     let disposed = false;
     const player: PlayerConnection = {
       label: entry.label,
+      url: entry.url,
       online: false,
       state: null,
       receivedAt: 0,
@@ -114,7 +117,7 @@ export function watchPlayers(
 
     function open() {
       if (disposed || closed) return;
-      socket = new WebSocket(entry.url);
+      socket = new WebSocket(playerSocketUrl(origin, entry.url));
       sockets.add(socket);
       socket.onmessage = (event) => {
         const message = JSON.parse(String(event.data)) as AgentToRemote;

@@ -1,6 +1,7 @@
 import { SOURCE_LABELS, advance, type RemoteToAgent, type SourceCommand, type SourceId, type SourceState } from '../shared/protocol.ts';
 import { handoffTargets, watchPlayers, type PlayerConnection } from './players.ts';
 import { installGlass } from './glass.ts';
+import { createVoiceControl } from './voice.ts';
 
 const TICK_MS = 250;
 const container = document.getElementById('players')!;
@@ -55,11 +56,13 @@ function createPlayerGroup() {
   resume.className = 'resume';
 
   const cardList = el('div', '', 'cards');
-  element.append(header, volumeRow, linkForm, error, resume, cardList);
+  const voice = createVoiceControl();
+  element.append(header, volumeRow, voice.element, linkForm, error, resume, cardList);
   const cards = new Map<SourceId | 'none', ReturnType<typeof createCard>>();
 
   function update(next: PlayerConnection, players: PlayerConnection[]) {
     player = next;
+    voice.update(next);
     const { online, state } = player;
     name.textContent = state?.name ?? player.label;
     status.textContent = state?.handoff && online ? 'Moving…' : online ? 'Online' : 'Unavailable';
@@ -104,7 +107,7 @@ function createPlayerGroup() {
     for (const card of cards.values()) card.tick();
   }
 
-  return { element, update, tick };
+  return { element, update, tick, destroy() { voice.destroy(); element.remove(); } };
 }
 
 function createCard(send: (message: RemoteToAgent) => void) {
@@ -281,7 +284,7 @@ function clock(ms: number) {
 
 const groups: ReturnType<typeof createPlayerGroup>[] = [];
 watchPlayers(location.origin, (players) => {
-  while (groups.length > players.length) groups.pop()!.element.remove();
+  while (groups.length > players.length) groups.pop()!.destroy();
   players.forEach((player, index) => {
     if (!groups[index]) {
       groups[index] = createPlayerGroup();

@@ -41,6 +41,8 @@ export interface Playback {
 
 export interface PlayerState {
   name: string;
+  voiceAvailable: boolean;
+  secureRemoteUrl?: string;
   handoff?: { source: SourceId; target: string };
   // The Sources to show, one card each, in SOURCE_ORDER: every open Source
   // tab with a track loaded. Empty when no Source tab is open.

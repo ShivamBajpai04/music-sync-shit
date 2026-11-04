@@ -9,6 +9,7 @@
     "service:status": "node scripts/service.ts status",
     "service:restart": "node scripts/service.ts restart",
     "service:uninstall": "node scripts/service.ts uninstall",
+    "voice:setup": "node scripts/voice-setup.ts",
     "test": "node --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
