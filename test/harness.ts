@@ -6,6 +6,7 @@ import type { Mac } from '../src/agent/mac.ts';
 import {
   EXTENSION_PATH,
   REMOTE_PATH,
+  parseStartHash,
   type AgentToExtension,
   type AgentToRemote,
   type PlayerEntry,
@@ -47,7 +48,8 @@ export async function startTestAgent(
     players = [],
     port = 0,
     lastPlaybackPath,
-  }: { players?: PlayerEntry[]; port?: number; lastPlaybackPath?: string } = {},
+    handoffTimeoutMs,
+  }: { players?: PlayerEntry[]; port?: number; lastPlaybackPath?: string; handoffTimeoutMs?: number } = {},
 ) {
   const agent = await startAgent({
     name,
@@ -58,6 +60,7 @@ export async function startTestAgent(
     saveIntervalMs: 20,
     mac,
     volumePollMs: 20,
+    handoffTimeoutMs,
   });
   return { agent, mac };
 }
@@ -82,6 +85,10 @@ export class FakeSource {
   received: SourceCommand[] = [];
   navigatedTo: string[] = [];
   reloads = 0;
+  simulateNavigation = false;
+  ignoreCommands = new Set<SourceCommand['type']>();
+  onCommand: (command: SourceCommand) => void = () => {};
+  onNavigate: (url: string) => void = () => {};
 
   constructor(agent: RunningAgent, source: SourceId, tracks: Track | Track[] | null, playing = false) {
     this.agent = agent;
@@ -108,10 +115,13 @@ export class FakeSource {
       if (message.type === 'open') {
         // Like the real driver after loading a started link.
         this.navigatedTo.push(message.url);
+        if (this.simulateNavigation) this.loadStartedLink(message.url);
         this.playing = true;
+        this.onNavigate(message.url);
       } else {
         this.received.push(message.command);
-        this.run(message.command);
+        this.onCommand(message.command);
+        if (!this.ignoreCommands.has(message.command.type)) this.run(message.command);
       }
       this.report();
     });
@@ -137,6 +147,19 @@ export class FakeSource {
         if (this.progress) this.progress = { ...this.progress, positionMs: command.positionMs };
         break;
     }
+  }
+
+  loadStartedLink(link: string) {
+    const url = new URL(link);
+    const index = this.playlist.findIndex(track => trackLink(this.source, track) === url.origin + url.pathname + (this.source === 'youtube-music' ? `?v=${url.searchParams.get('v')}` : ''));
+    if (index >= 0) this.goTo(index);
+    const positionMs = parseStartHash(url.hash) ?? 0;
+    if (this.progress) this.progress.positionMs = positionMs;
+    const list = url.searchParams.get('list');
+    const context = /^spotify:(playlist|album):(.+)$/.exec(url.searchParams.get('context') ?? '');
+    this.context = this.source === 'youtube-music'
+      ? list ? `https://music.youtube.com/playlist?list=${list}` : null
+      : context ? `https://open.spotify.com/${context[1]}/${context[2]}` : null;
   }
 
   private goTo(index: number) {
@@ -192,7 +215,7 @@ export class FakeRemote {
     this.socket.on('message', (data) => {
       const message = JSON.parse(String(data)) as AgentToRemote;
       if (message.type === 'state') this.states.push(message.state);
-      else this.errors.push(message.message);
+      else if (message.type === 'error') this.errors.push(message.message);
     });
     await new Promise<void>((resolve, reject) => {
       this.socket.once('open', resolve);
@@ -218,6 +241,10 @@ export class FakeRemote {
 
   reloadTabs(source?: SourceId) {
     this.sendMessage({ type: 'reload-tabs', source });
+  }
+
+  handoff(source: SourceId, target: string) {
+    this.sendMessage({ type: 'handoff', source, target });
   }
 
   startLink(link: string) {

@@ -26,10 +26,22 @@ export interface SourceState {
   track: Track | null;
   playing: boolean;
   progress: Progress | null;
+  context: string | null;
+  canHandoff: boolean;
+}
+
+export interface Playback {
+  source: SourceId;
+  track: Track;
+  // Reopens the track; context supplies its playlist or album when known.
+  link: string;
+  context: string | null;
+  progress: Progress | null;
 }
 
 export interface PlayerState {
   name: string;
+  handoff?: { source: SourceId; target: string };
   // The Sources to show, one card each, in SOURCE_ORDER: every open Source
   // tab with a track loaded. Empty when no Source tab is open.
   sources: SourceState[];
@@ -52,6 +64,9 @@ export type SourceCommand =
 
 // Remote <-> agent, on the agent's tailnet address.
 export type RemoteToAgent =
+  | { type: 'handoff'; source: SourceId; target: string }
+  // Peer agents use this same tailnet-facing protocol.
+  | { type: 'start-playback'; requestId: string; playback: Playback }
   | { type: 'reload-tabs'; source?: SourceId }
   | { type: 'command'; source: SourceId; command: SourceCommand }
   | { type: 'set-volume'; volume: number }
@@ -59,6 +74,7 @@ export type RemoteToAgent =
   | { type: 'start-link'; link: string }
   | { type: 'resume' };
 export type AgentToRemote =
+  | { type: 'handoff-result'; requestId: string; ok: boolean; state: PlayerState; message?: string }
   | { type: 'state'; state: PlayerState }
   // Sent only to the Remote whose request failed.
   | { type: 'error'; message: string };

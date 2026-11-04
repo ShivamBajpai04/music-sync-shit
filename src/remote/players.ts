@@ -18,6 +18,14 @@ export interface WatchOptions {
   reconnectMs?: number;
 }
 
+export function handoffTargets(player: PlayerConnection, players: PlayerConnection[]) {
+  return players.filter(peer => peer !== player).map(peer => ({
+    label: peer.label,
+    name: peer.state?.name ?? peer.label,
+    available: player.online && peer.online && !player.state?.handoff && !peer.state?.handoff,
+  }));
+}
+
 export function watchPlayers(
   origin: string,
   onChange: (players: PlayerConnection[]) => void,
@@ -75,7 +83,7 @@ export function watchPlayers(
         const message = JSON.parse(String(event.data)) as AgentToRemote;
         if (message.type === 'error') {
           player.error = message.message;
-        } else {
+        } else if (message.type === 'state') {
           player.state = message.state;
           player.receivedAt = Date.now();
           player.online = true;
