@@ -5,6 +5,10 @@
   "scripts": {
     "build": "node scripts/build.ts",
     "agent": "node src/agent/main.ts",
+    "service:install": "node scripts/service.ts install",
+    "service:status": "node scripts/service.ts status",
+    "service:restart": "node scripts/service.ts restart",
+    "service:uninstall": "node scripts/service.ts uninstall",
     "test": "node --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },

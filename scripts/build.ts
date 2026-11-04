@@ -1,8 +1,20 @@
-// Builds the extension (load dist/extension unpacked in Arc) and the Remote page.
+// Builds the standalone agent, extension and Remote page.
 import { cp, rm } from 'node:fs/promises';
 import { build } from 'esbuild';
 
 await rm('dist', { recursive: true, force: true });
+
+// A standalone agent keeps the login service independent of this checkout
+// and its node_modules. The CommonJS bundle also includes ws.
+await build({
+  entryPoints: ['src/agent/main.ts'],
+  outfile: 'dist/agent/main.cjs',
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node24',
+  define: { 'import.meta.dirname': '__dirname' },
+});
 
 await build({
   entryPoints: {
