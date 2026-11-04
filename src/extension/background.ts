@@ -7,6 +7,7 @@ import {
   type SourceId,
 } from '../shared/protocol.ts';
 import type { BackgroundToTab, TabToBackground } from './messages.ts';
+import { reloadTabs } from './reload-tabs.ts';
 
 const AGENT_URL = `ws://127.0.0.1:${DEFAULT_EXTENSION_PORT}${EXTENSION_PATH}`;
 const RECONNECT_MS = 2_000;
@@ -94,7 +95,9 @@ function connect() {
   };
   socket.onmessage = (event) => {
     const message = JSON.parse(String(event.data)) as AgentToExtension;
-    if (message.type === 'command') {
+    if (message.type === 'reload-tabs') {
+      void reloadTabs(message.source, chrome.tabs).catch(error => console.error('Reloading Source tabs failed:', error));
+    } else if (message.type === 'command') {
       const command: BackgroundToTab = { type: 'command', command: message.command };
       tabs.get(message.source)?.postMessage(command);
     } else if (message.type === 'open') {

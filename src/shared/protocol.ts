@@ -52,6 +52,7 @@ export type SourceCommand =
 
 // Remote <-> agent, on the agent's tailnet address.
 export type RemoteToAgent =
+  | { type: 'reload-tabs'; source?: SourceId }
   | { type: 'command'; source: SourceId; command: SourceCommand }
   | { type: 'set-volume'; volume: number }
   // A pasted Spotify or YouTube Music link to start playing on this Player.
@@ -77,6 +78,7 @@ export type ExtensionToAgent =
     }
   | { type: 'source-closed'; source: SourceId };
 export type AgentToExtension =
+  | { type: 'reload-tabs'; source?: SourceId }
   | { type: 'command'; source: SourceId; command: SourceCommand }
   // Navigate the Source's open tab to url (which carries START_MARKER).
   | { type: 'open'; source: SourceId; url: string }

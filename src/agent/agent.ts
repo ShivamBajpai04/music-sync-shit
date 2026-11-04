@@ -230,7 +230,17 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.send(JSON.stringify(hello));
       ws.on('message', (data) => {
         const message = JSON.parse(String(data)) as RemoteToAgent;
-        if (message.type === 'command') sendCommand(message.source, message.command);
+        if (message.type === 'reload-tabs') {
+          if (!extensionSockets.clients.size) {
+            const error: AgentToRemote = { type: 'error', message: 'The browser extension is disconnected. Reconnect it to reload tabs.' };
+            ws.send(JSON.stringify(error));
+            return;
+          }
+          // Recovery must work even when a Source's content script has disconnected.
+          const reload: AgentToExtension = { type: 'reload-tabs', source: message.source };
+          for (const extension of extensionSockets.clients) extension.send(JSON.stringify(reload));
+        }
+        else if (message.type === 'command') sendCommand(message.source, message.command);
         else if (message.type === 'set-volume') void setVolume(message.volume);
         else if (message.type === 'start-link') void startLink(message.link, ws);
         else void resume(ws);
