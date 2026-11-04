@@ -1,5 +1,5 @@
 import { SOURCE_LABELS, advance, type RemoteToAgent, type SourceCommand, type SourceId, type SourceState } from '../shared/protocol.ts';
-import { watchPlayers, type PlayerConnection } from './players.ts';
+import { handoffTargets, watchPlayers, type PlayerConnection } from './players.ts';
 import { installGlass } from './glass.ts';
 
 const TICK_MS = 250;
@@ -58,11 +58,11 @@ function createPlayerGroup() {
   element.append(header, volumeRow, linkForm, error, resume, cardList);
   const cards = new Map<SourceId | 'none', ReturnType<typeof createCard>>();
 
-  function update(next: PlayerConnection) {
+  function update(next: PlayerConnection, players: PlayerConnection[]) {
     player = next;
     const { online, state } = player;
     name.textContent = state?.name ?? player.label;
-    status.textContent = online ? 'Online' : 'Unavailable';
+    status.textContent = state?.handoff && online ? 'Moving…' : online ? 'Online' : 'Unavailable';
     status.className = `status ${online ? 'online' : 'offline'}`;
     element.classList.toggle('offline', !online);
 
@@ -96,7 +96,7 @@ function createPlayerGroup() {
       if (cardList.children[index] !== card.element) {
         cardList.insertBefore(card.element, cardList.children[index] ?? null);
       }
-      card.update(online, source, player!.receivedAt);
+      card.update(online, source, player!.receivedAt, handoffTargets(next, players));
     });
   }
 
@@ -156,13 +156,15 @@ function createCard(send: (message: RemoteToAgent) => void) {
   const controls = el('div', '', 'controls');
   controls.append(previous, playPause, next);
 
-  element.append(now, progressRow, controls);
+  const handoffs = el('div', '', 'handoffs');
+  element.append(now, progressRow, controls, handoffs);
+  const moveButtons = new Map<string, HTMLButtonElement>();
 
   function command(command: SourceCommand) {
     if (card) send({ type: 'command', source: card.source, command });
   }
 
-  function update(isOnline: boolean, state: SourceState | null, at: number) {
+  function update(isOnline: boolean, state: SourceState | null, at: number, peers: ReturnType<typeof handoffTargets>) {
     online = isOnline;
     card = state;
     receivedAt = at;
@@ -187,6 +189,22 @@ function createCard(send: (message: RemoteToAgent) => void) {
     const playing = !!card?.playing;
     playPause.replaceChildren(icon(playing ? 'pause' : 'play'));
     playPause.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    handoffs.hidden = !playing || !track || !peers.length;
+    for (const peer of peers) {
+      let move = moveButtons.get(peer.label);
+      if (!move) {
+        move = button('', '', () => {
+          if (card) send({ type: 'handoff', source: card.source, target: peer.label });
+        });
+        move.className = 'resume handoff';
+        moveButtons.set(peer.label, move);
+        handoffs.append(move);
+      }
+      move.textContent = `Move to ${peer.name}`;
+      move.setAttribute('aria-label', `Move playback to ${peer.name}`);
+      move.disabled = !peer.available || state?.canHandoff === false;
+      move.title = !peer.available ? `${peer.name} is unavailable or a Handoff is in progress` : state?.canHandoff === false ? 'Waiting for the track link' : `Move this track and position to ${peer.name}`;
+    }
     tick();
   }
 
@@ -262,7 +280,7 @@ watchPlayers(location.origin, (players) => {
       groups[index] = createPlayerGroup();
       container.append(groups[index].element);
     }
-    groups[index].update(player);
+    groups[index].update(player, players);
   });
 });
 setInterval(() => {

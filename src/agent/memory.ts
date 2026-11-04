@@ -1,17 +1,9 @@
 // The Player's last playback, kept on disk so Resume survives agent restarts.
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { Progress, SourceId, Track } from '../shared/protocol.ts';
+import type { Playback } from '../shared/protocol.ts';
 
-export interface LastPlayback {
-  source: SourceId;
-  track: Track;
-  // Reopens the track.
-  link: string;
-  // Playlist or album containing the track, when the page exposes one.
-  context: string | null;
-  progress: Progress | null;
-}
+export type LastPlayback = Playback;
 
 export async function loadLastPlayback(path: string | undefined): Promise<LastPlayback | null> {
   if (!path) return null;

@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import {
   EXTENSION_PATH,
   PLAYERS_PATH,
@@ -21,10 +21,13 @@ import {
   type SourceId,
   type SourceState,
   type Track,
+  type Playback,
 } from '../shared/protocol.ts';
 import { parseLink } from './links.ts';
 import { loadLastPlayback, saveLastPlayback, type LastPlayback } from './memory.ts';
 import type { Mac } from './mac.ts';
+import { playbackUrl } from './playback.ts';
+import { HandoffError, playbackStatus, startOnPeer } from './handoff.ts';
 
 export interface AgentOptions {
   name: string;
@@ -44,6 +47,7 @@ export interface AgentOptions {
   pingIntervalMs?: number;
   // How often to re-read system volume, to catch changes made on the Mac.
   volumePollMs?: number;
+  handoffTimeoutMs?: number;
 }
 
 export interface RunningAgent {
@@ -81,6 +85,10 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   const saved = await loadLastPlayback(options.lastPlaybackPath);
   let remembered: Remembered | null = saved && { ...saved, playing: false, at: Date.now() };
   let pendingResume: { source: SourceId; link: string; positionMs: number; playRequested: boolean } | null = null;
+  let outgoingHandoff: { source: SourceId; target: string } | undefined;
+  let incomingHandoff = false;
+  const stopping = new AbortController();
+  const handoffTimeoutMs = options.handoffTimeoutMs ?? 25_000;
 
   function playerState(): PlayerState {
     // A card per open Source tab with a track loaded, playing or paused. If
@@ -91,6 +99,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     const resumable = remembered && !sources.get(remembered.source)?.playing;
     return {
       name: options.name,
+      ...(outgoingHandoff ? { handoff: outgoingHandoff } : {}),
       sources: shown.map(sourceState),
       volume,
       resume: resumable ? { source: remembered!.source, track: remembered!.track } : null,
@@ -143,6 +152,8 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       track: tab.track,
       playing: tab.playing,
       progress: tab.progress ? advance(tab.progress, tab.playing, Date.now() - tab.receivedAt) : null,
+      context: tab.context,
+      canHandoff: !!tab.track && !!tab.link,
     };
   }
 
@@ -230,7 +241,9 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       ws.send(JSON.stringify(hello));
       ws.on('message', (data) => {
         const message = JSON.parse(String(data)) as RemoteToAgent;
-        if (message.type === 'reload-tabs') {
+        if (message.type === 'handoff') void handoff(message.source, message.target, ws);
+        else if (message.type === 'start-playback') void receiveHandoff(message, ws);
+        else if (message.type === 'reload-tabs') {
           if (!extensionSockets.clients.size) {
             const error: AgentToRemote = { type: 'error', message: 'The browser extension is disconnected. Reconnect it to reload tabs.' };
             ws.send(JSON.stringify(error));
@@ -250,6 +263,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   });
 
   async function startLink(link: string, requester: WebSocket) {
+    if (incomingHandoff || outgoingHandoff) return reportError(requester, 'A Handoff is already in progress on this Player.');
     const parsed = parseLink(link);
     if ('error' in parsed) {
       const message: AgentToRemote = { type: 'error', message: parsed.error };
@@ -262,6 +276,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
   // Plays what's loaded in the remembered Source's tab, or reopens the
   // remembered track where it got to.
   async function resume(requester: WebSocket) {
+    if (incomingHandoff || outgoingHandoff) return reportError(requester, 'A Handoff is already in progress on this Player.');
     if (!remembered) return;
     const tab = sources.get(remembered.source);
     if (tab?.track && tab.link === remembered.link) {
@@ -270,19 +285,103 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
       return;
     }
     const positionMs = rememberedProgress(remembered)?.positionMs;
-    const url = new URL(remembered.link);
-    if (remembered.source === 'youtube-music' && remembered.context) {
-      const list = new URL(remembered.context).searchParams.get('list');
-      if (list) url.searchParams.set('list', list);
-    } else if (remembered.source === 'spotify' && remembered.context) {
-      const context = new URL(remembered.context);
-      const match = /^\/(playlist|album)\/([A-Za-z0-9]+)$/.exec(context.pathname);
-      if (context.hostname === 'open.spotify.com' && match) {
-        url.searchParams.set('context', `spotify:${match[1]}:${match[2]}`);
-      }
-    }
     pendingResume = { source: remembered.source, link: remembered.link, positionMs: positionMs ?? 0, playRequested: false };
-    if (!await open(remembered.source, `${url}${startHash(positionMs)}`, requester)) pendingResume = null;
+    if (!await open(remembered.source, playbackUrl({ ...remembered, progress: rememberedProgress(remembered) }), requester)) pendingResume = null;
+  }
+
+  function reportError(requester: WebSocket, message: string) {
+    if (requester.readyState === WebSocket.OPEN) requester.send(JSON.stringify({ type: 'error', message } satisfies AgentToRemote));
+  }
+
+  async function waitForPlayback(check: () => boolean, requester: WebSocket) {
+    const deadline = Date.now() + handoffTimeoutMs;
+    while (!stopping.signal.aborted && requester.readyState === WebSocket.OPEN) {
+      if (check()) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    return false;
+  }
+
+  async function receiveHandoff(message: Extract<RemoteToAgent, { type: 'start-playback' }>, requester: WebSocket) {
+    const reply = (ok: boolean, reason?: string) => {
+      if (requester.readyState === WebSocket.OPEN) requester.send(JSON.stringify({
+        type: 'handoff-result', requestId: message.requestId, ok, state: playerState(), message: reason,
+      } satisfies AgentToRemote));
+    };
+    if (incomingHandoff || outgoingHandoff || pendingResume) return reply(false, 'A Handoff or Resume is already in progress on the target.');
+    incomingHandoff = true;
+    try {
+      const playback = message.playback;
+      const parsed = parseLink(playback.link);
+      if ('error' in parsed || parsed.source !== playback.source || !playback.track) throw new Error('The playback link is invalid.');
+      const positionMs = playback.progress?.positionMs ?? 0;
+      if (!Number.isFinite(positionMs) || positionMs < 0) throw new Error('The playback position is invalid.');
+      const loaded = sources.get(playback.source);
+      if (loaded?.link === parsed.url && loaded.context === playback.context) {
+        pauseOthers(playback.source);
+        sendCommand(playback.source, { type: 'play' });
+        sendCommand(playback.source, { type: 'seek', positionMs });
+      } else if (!await open(playback.source, playbackUrl(playback), requester)) {
+        throw new Error('Could not open the target Source in Arc.');
+      }
+      let seekRequested = false;
+      const started = await waitForPlayback(() => {
+        const tab = sources.get(playback.source);
+        if (!tab?.playing || tab.link !== parsed.url) return false;
+        if ([...sources].some(([source, other]) => source !== playback.source && other.playing)) return false;
+        if (!tab.progress) return positionMs === 0;
+        const position = advance(tab.progress, tab.playing, Date.now() - tab.receivedAt).positionMs;
+        if (Math.abs(position - positionMs) <= 2_000) return true;
+        if (!seekRequested) {
+          seekRequested = true;
+          sendCommand(playback.source, { type: 'seek', positionMs });
+        }
+        return false;
+      }, requester);
+      if (!started) throw new Error('The target did not confirm the requested track and position.');
+      reply(true);
+    } catch (error) {
+      reply(false, error instanceof Error ? error.message : 'Could not start playback.');
+    } finally {
+      incomingHandoff = false;
+    }
+  }
+
+  async function handoff(source: SourceId, targetLabel: string, requester: WebSocket) {
+    const target = options.players.find(player => player.label === targetLabel);
+    const tab = sources.get(source);
+    if (incomingHandoff || outgoingHandoff || pendingResume) return reportError(requester, 'A Handoff or Resume is already in progress on this Player.');
+    if (!target) return reportError(requester, 'The target Player is not configured on this Mac.');
+    const ownPort = (remoteServer.address() as AddressInfo).port;
+    if (target.url === `ws://${options.remote.host}:${ownPort}${REMOTE_PATH}`) return reportError(requester, 'Choose another Player for Handoff.');
+    if (!tab?.playing || !tab.track || !tab.link) return reportError(requester, 'The playing Source does not have a track link available for Handoff yet.');
+    const playback: Playback = {
+      source, track: tab.track, link: tab.link, context: tab.context,
+      progress: tab.progress ? advance(tab.progress, tab.playing, Date.now() - tab.receivedAt) : null,
+    };
+    outgoingHandoff = { source, target: target.label };
+    broadcast();
+    let targetState: PlayerState | null = null;
+    try {
+      targetState = await startOnPeer(target, playback, handoffTimeoutMs + 2_000, stopping.signal);
+      const original = sources.get(source);
+      if (!original || original.link !== playback.link) throw new Error('The original Source disconnected or changed tracks.');
+      // Spotify may have already paused the original due to its session rule.
+      if (original.playing) sendCommand(source, { type: 'pause' });
+      const paused = await waitForPlayback(() => {
+        const current = sources.get(source);
+        return !!current && current.link === playback.link && !current.playing;
+      }, requester);
+      if (!paused) throw new Error('The target started, but the original did not confirm pausing.');
+    } catch (error) {
+      if (error instanceof HandoffError) targetState = error.targetState;
+      const reason = error instanceof Error ? error.message : 'Handoff failed.';
+      reportError(requester, `Handoff failed: ${reason} ${playbackStatus(options.name, playerState())} ${playbackStatus(targetState?.name ?? target.label, targetState)}`);
+    } finally {
+      outgoingHandoff = undefined;
+      broadcast();
+    }
   }
 
   // Only one Source plays at a time when starting something; the other is
@@ -349,6 +448,7 @@ export async function startAgent(options: AgentOptions): Promise<RunningAgent> {
     remotePort: (remoteServer.address() as AddressInfo).port,
     extensionPort: (extensionServer.address() as AddressInfo).port,
     async close() {
+      stopping.abort();
       clearInterval(ping);
       clearInterval(volumePoll);
       clearInterval(savePoll);
