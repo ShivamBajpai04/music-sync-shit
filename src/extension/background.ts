@@ -8,6 +8,7 @@ import {
 } from '../shared/protocol.ts';
 import type { BackgroundToTab, TabToBackground } from './messages.ts';
 import { reloadTabs } from './reload-tabs.ts';
+import { navigateYouTube } from './youtube-navigation.ts';
 
 const AGENT_URL = `ws://127.0.0.1:${DEFAULT_EXTENSION_PORT}${EXTENSION_PATH}`;
 const RECONNECT_MS = 2_000;
@@ -102,7 +103,17 @@ function connect() {
       tabs.get(message.source)?.postMessage(command);
     } else if (message.type === 'open') {
       const tabId = tabs.get(message.source)?.sender?.tab?.id;
-      if (tabId !== undefined) void chrome.tabs.update(tabId, { url: message.url });
+      if (tabId !== undefined) {
+        if (message.source === 'youtube-music') {
+          // Stay inside the app: a document navigation can block on the
+          // embedded player's beforeunload prompt during playback (#15).
+          void chrome.scripting.executeScript({
+            target: { tabId }, world: 'MAIN', func: navigateYouTube, args: [message.url],
+          }).then(results => {
+            if (!results[0]?.result) console.error('YouTube Music navigation did not finish');
+          }).catch(error => console.error('YouTube Music navigation failed:', error));
+        } else void chrome.tabs.update(tabId, { url: message.url });
+      }
     }
   };
   socket.onclose = () => {
